@@ -1,0 +1,25 @@
+# The node plugin's base image: the file system tools k8s.io/mount-utils runs (mount, umount, blkid, blockdev, fsck,
+# mkfs.ext4, mkfs.xfs, resize2fs, dumpe2fs, xfs_growfs, xfs_io) on Wolfi, with no shell and no package manager.
+# hack/image.sh builds it with apko for both architectures and puts the driver binary on top with ko.
+contents:
+  keyring:
+    - https://packages.wolfi.dev/os/wolfi-signing.rsa.pub
+  repositories:
+    - https://packages.wolfi.dev/os
+  packages:
+    - wolfi-baselayout
+    - ca-certificates-bundle
+    - blkid
+    - blockdev
+    - mount
+    - umount
+    - e2fsprogs
+    - e2fsprogs-extra
+    - xfsprogs
+    - xfsprogs-extra
+archs:
+  - x86_64
+  - aarch64
+annotations:
+  org.opencontainers.image.source: https://github.com/ankraio/ankra-cloud-csi
+  org.opencontainers.image.licenses: Apache-2.0

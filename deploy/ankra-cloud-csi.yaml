@@ -1,0 +1,558 @@
+---
+# Source: ankra-cloud-csi/templates/rbac.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ankra-cloud-csi-controller
+  namespace: kube-system
+  labels:
+    app.kubernetes.io/name: ankra-cloud-csi
+    app.kubernetes.io/instance: ankra-cloud-csi
+    app.kubernetes.io/version: "v0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: ankra-cloud-csi-0.1.0
+
+---
+# Source: ankra-cloud-csi/templates/rbac.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ankra-cloud-csi-node
+  namespace: kube-system
+  labels:
+    app.kubernetes.io/name: ankra-cloud-csi
+    app.kubernetes.io/instance: ankra-cloud-csi
+    app.kubernetes.io/version: "v0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: ankra-cloud-csi-0.1.0
+
+---
+# Source: ankra-cloud-csi/templates/storageclasses.yaml
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: ankra-standard
+  labels:
+    app.kubernetes.io/name: ankra-cloud-csi
+    app.kubernetes.io/instance: ankra-cloud-csi
+    app.kubernetes.io/version: "v0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: ankra-cloud-csi-0.1.0
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "true"
+provisioner: csi.ankra.cloud
+parameters:
+  tier: "standard"
+  csi.storage.k8s.io/fstype: "ext4"
+reclaimPolicy: Delete
+allowVolumeExpansion: true
+# The volume is created once a pod is scheduled, in that node's zone and, for local-nvme, on that server.
+volumeBindingMode: WaitForFirstConsumer
+
+---
+# Source: ankra-cloud-csi/templates/storageclasses.yaml
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: ankra-maxiops
+  labels:
+    app.kubernetes.io/name: ankra-cloud-csi
+    app.kubernetes.io/instance: ankra-cloud-csi
+    app.kubernetes.io/version: "v0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: ankra-cloud-csi-0.1.0
+provisioner: csi.ankra.cloud
+parameters:
+  tier: "maxiops"
+  csi.storage.k8s.io/fstype: "ext4"
+reclaimPolicy: Delete
+allowVolumeExpansion: true
+# The volume is created once a pod is scheduled, in that node's zone and, for local-nvme, on that server.
+volumeBindingMode: WaitForFirstConsumer
+
+---
+# Source: ankra-cloud-csi/templates/storageclasses.yaml
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: ankra-hdd
+  labels:
+    app.kubernetes.io/name: ankra-cloud-csi
+    app.kubernetes.io/instance: ankra-cloud-csi
+    app.kubernetes.io/version: "v0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: ankra-cloud-csi-0.1.0
+provisioner: csi.ankra.cloud
+parameters:
+  tier: "hdd"
+  csi.storage.k8s.io/fstype: "ext4"
+reclaimPolicy: Delete
+allowVolumeExpansion: true
+# The volume is created once a pod is scheduled, in that node's zone and, for local-nvme, on that server.
+volumeBindingMode: WaitForFirstConsumer
+
+---
+# Source: ankra-cloud-csi/templates/storageclasses.yaml
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: ankra-local-nvme
+  labels:
+    app.kubernetes.io/name: ankra-cloud-csi
+    app.kubernetes.io/instance: ankra-cloud-csi
+    app.kubernetes.io/version: "v0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: ankra-cloud-csi-0.1.0
+provisioner: csi.ankra.cloud
+parameters:
+  tier: "local-nvme"
+  csi.storage.k8s.io/fstype: "ext4"
+reclaimPolicy: Delete
+allowVolumeExpansion: true
+# The volume is created once a pod is scheduled, in that node's zone and, for local-nvme, on that server.
+volumeBindingMode: WaitForFirstConsumer
+
+---
+# Source: ankra-cloud-csi/templates/rbac.yaml
+# The union of what external-provisioner, -attacher, -resizer and -snapshotter need (their upstream rbac.yaml).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ankra-cloud-csi-controller
+  labels:
+    app.kubernetes.io/name: ankra-cloud-csi
+    app.kubernetes.io/instance: ankra-cloud-csi
+    app.kubernetes.io/version: "v0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: ankra-cloud-csi-0.1.0
+rules:
+  - apiGroups: [""]
+    resources: ["persistentvolumes"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims/status"]
+    verbs: ["patch", "update"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["nodes", "pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses", "csinodes", "volumeattributesclasses"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["volumeattachments"]
+    verbs: ["get", "list", "watch", "patch", "update"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["volumeattachments/status"]
+    verbs: ["patch"]
+  - apiGroups: ["snapshot.storage.k8s.io"]
+    resources: ["volumesnapshots", "volumesnapshotclasses"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["snapshot.storage.k8s.io"]
+    resources: ["volumesnapshotcontents"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["snapshot.storage.k8s.io"]
+    resources: ["volumesnapshotcontents/status"]
+    verbs: ["update", "patch"]
+  - apiGroups: ["groupsnapshot.storage.k8s.io"]
+    resources: ["volumegroupsnapshotclasses", "volumegroupsnapshotcontents"]
+    verbs: ["get", "list", "watch"]
+
+---
+# Source: ankra-cloud-csi/templates/rbac.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: ankra-cloud-csi-controller
+  labels:
+    app.kubernetes.io/name: ankra-cloud-csi
+    app.kubernetes.io/instance: ankra-cloud-csi
+    app.kubernetes.io/version: "v0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: ankra-cloud-csi-0.1.0
+subjects:
+  - kind: ServiceAccount
+    name: ankra-cloud-csi-controller
+    namespace: kube-system
+roleRef:
+  kind: ClusterRole
+  name: ankra-cloud-csi-controller
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# Source: ankra-cloud-csi/templates/rbac.yaml
+# Leader election of the controller's sidecars.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ankra-cloud-csi-controller-leases
+  namespace: kube-system
+  labels:
+    app.kubernetes.io/name: ankra-cloud-csi
+    app.kubernetes.io/instance: ankra-cloud-csi
+    app.kubernetes.io/version: "v0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: ankra-cloud-csi-0.1.0
+rules:
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "watch", "list", "delete", "update", "create"]
+
+---
+# Source: ankra-cloud-csi/templates/rbac.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ankra-cloud-csi-controller-leases
+  namespace: kube-system
+  labels:
+    app.kubernetes.io/name: ankra-cloud-csi
+    app.kubernetes.io/instance: ankra-cloud-csi
+    app.kubernetes.io/version: "v0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: ankra-cloud-csi-0.1.0
+subjects:
+  - kind: ServiceAccount
+    name: ankra-cloud-csi-controller
+    namespace: kube-system
+roleRef:
+  kind: Role
+  name: ankra-cloud-csi-controller-leases
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# Source: ankra-cloud-csi/templates/node.yaml
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: ankra-cloud-csi-node
+  namespace: kube-system
+  labels:
+    app.kubernetes.io/name: ankra-cloud-csi
+    app.kubernetes.io/instance: ankra-cloud-csi
+    app.kubernetes.io/version: "v0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: ankra-cloud-csi-0.1.0
+    app.kubernetes.io/component: node
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ankra-cloud-csi
+      app.kubernetes.io/instance: ankra-cloud-csi
+      app.kubernetes.io/component: node
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 10%
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ankra-cloud-csi
+        app.kubernetes.io/instance: ankra-cloud-csi
+        app.kubernetes.io/version: "v0.1.0"
+        app.kubernetes.io/managed-by: Helm
+        helm.sh/chart: ankra-cloud-csi-0.1.0
+        app.kubernetes.io/component: node
+    spec:
+      serviceAccountName: ankra-cloud-csi-node
+      priorityClassName: system-node-critical
+      # The host network reaches the metadata service (fd00:ec2::254, 169.254.169.254) from the server's own
+      # address, which is how the service tells which server is asking.
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: ankra-cloud-csi
+          image: share.ankra.cloud/library/ankra-cloud-csi:v0.1.0
+          imagePullPolicy: IfNotPresent
+          args:
+            - --mode=node
+            - --endpoint=unix:///csi/csi.sock
+            - --max-volumes-per-node=15
+          env:
+            - name: ANKRA_CLOUD_API_URL
+              value: "https://cloud.ankra.app"
+            - name: ANKRA_CLOUD_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: ankra-cloud-csi-api
+                  key: token
+          securityContext:
+            privileged: true
+          ports:
+            - name: healthz
+              containerPort: 9809
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: healthz
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 5
+          volumeMounts:
+            - name: plugin-dir
+              mountPath: /csi
+            - name: kubelet-dir
+              mountPath: /var/lib/kubelet
+              mountPropagation: Bidirectional
+            - name: device-dir
+              mountPath: /dev
+            - name: udev-dir
+              mountPath: /run/udev
+              readOnly: true
+          resources:
+            limits:
+              memory: 128Mi
+            requests:
+              cpu: 10m
+              memory: 32Mi
+        - name: node-driver-registrar
+          image: registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.13.0
+          args:
+            - --csi-address=/csi/csi.sock
+            - --kubelet-registration-path=/var/lib/kubelet/plugins/csi.ankra.cloud/csi.sock
+          livenessProbe:
+            exec:
+              command:
+                - /csi-node-driver-registrar
+                - --kubelet-registration-path=/var/lib/kubelet/plugins/csi.ankra.cloud/csi.sock
+                - --mode=kubelet-registration-probe
+            initialDelaySeconds: 30
+            timeoutSeconds: 15
+          volumeMounts:
+            - name: plugin-dir
+              mountPath: /csi
+            - name: registration-dir
+              mountPath: /registration
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+        - name: liveness-probe
+          image: registry.k8s.io/sig-storage/livenessprobe:v2.15.0
+          args:
+            - --csi-address=/csi/csi.sock
+            - --http-endpoint=:9809
+          volumeMounts:
+            - name: plugin-dir
+              mountPath: /csi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: plugin-dir
+          hostPath:
+            path: /var/lib/kubelet/plugins/csi.ankra.cloud
+            type: DirectoryOrCreate
+        - name: registration-dir
+          hostPath:
+            path: /var/lib/kubelet/plugins_registry
+            type: Directory
+        - name: kubelet-dir
+          hostPath:
+            path: /var/lib/kubelet
+            type: Directory
+        - name: device-dir
+          hostPath:
+            path: /dev
+            type: Directory
+        - name: udev-dir
+          hostPath:
+            path: /run/udev
+            type: DirectoryOrCreate
+
+---
+# Source: ankra-cloud-csi/templates/controller.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ankra-cloud-csi-controller
+  namespace: kube-system
+  labels:
+    app.kubernetes.io/name: ankra-cloud-csi
+    app.kubernetes.io/instance: ankra-cloud-csi
+    app.kubernetes.io/version: "v0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: ankra-cloud-csi-0.1.0
+    app.kubernetes.io/component: controller
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ankra-cloud-csi
+      app.kubernetes.io/instance: ankra-cloud-csi
+      app.kubernetes.io/component: controller
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ankra-cloud-csi
+        app.kubernetes.io/instance: ankra-cloud-csi
+        app.kubernetes.io/version: "v0.1.0"
+        app.kubernetes.io/managed-by: Helm
+        helm.sh/chart: ankra-cloud-csi-0.1.0
+        app.kubernetes.io/component: controller
+    spec:
+      serviceAccountName: ankra-cloud-csi-controller
+      priorityClassName: system-cluster-critical
+      tolerations:
+        - effect: NoSchedule
+          key: node-role.kubernetes.io/control-plane
+          operator: Exists
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: ankra-cloud-csi
+          image: share.ankra.cloud/library/ankra-cloud-csi:v0.1.0
+          imagePullPolicy: IfNotPresent
+          args:
+            - --mode=controller
+            - --endpoint=unix:///csi/csi.sock
+            - --operation-timeout=5m
+          env:
+            - name: ANKRA_CLOUD_API_URL
+              value: "https://cloud.ankra.app"
+            - name: ANKRA_CLOUD_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: ankra-cloud-csi-api
+                  key: token
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          ports:
+            - name: healthz
+              containerPort: 9808
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: healthz
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 5
+          resources:
+            limits:
+              memory: 128Mi
+            requests:
+              cpu: 10m
+              memory: 32Mi
+        - name: csi-provisioner
+          image: registry.k8s.io/sig-storage/csi-provisioner:v5.2.0
+          args:
+            - --csi-address=/csi/csi.sock
+            - --feature-gates=Topology=true
+            - --default-fstype=ext4
+            - --extra-create-metadata
+            - --leader-election
+            - --leader-election-namespace=kube-system
+            - --timeout=6m
+            - --retry-interval-max=5m
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+        - name: csi-attacher
+          image: registry.k8s.io/sig-storage/csi-attacher:v4.8.1
+          args:
+            - --csi-address=/csi/csi.sock
+            - --leader-election
+            - --leader-election-namespace=kube-system
+            - --timeout=6m
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+        - name: csi-resizer
+          image: registry.k8s.io/sig-storage/csi-resizer:v1.13.2
+          args:
+            - --csi-address=/csi/csi.sock
+            - --leader-election
+            - --leader-election-namespace=kube-system
+            - --timeout=6m
+            - --handle-volume-inuse-error=false
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+        - name: csi-snapshotter
+          image: registry.k8s.io/sig-storage/csi-snapshotter:v8.2.1
+          args:
+            - --csi-address=/csi/csi.sock
+            - --leader-election
+            - --leader-election-namespace=kube-system
+            - --timeout=6m
+            - --extra-create-metadata
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+        - name: liveness-probe
+          image: registry.k8s.io/sig-storage/livenessprobe:v2.15.0
+          args:
+            - --csi-address=/csi/csi.sock
+            - --http-endpoint=:9808
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: socket-dir
+          emptyDir: {}
+
+---
+# Source: ankra-cloud-csi/templates/csidriver.yaml
+apiVersion: storage.k8s.io/v1
+kind: CSIDriver
+metadata:
+  name: csi.ankra.cloud
+  labels:
+    app.kubernetes.io/name: ankra-cloud-csi
+    app.kubernetes.io/instance: ankra-cloud-csi
+    app.kubernetes.io/version: "v0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: ankra-cloud-csi-0.1.0
+spec:
+  attachRequired: true
+  podInfoOnMount: false
+  fsGroupPolicy: File
+  volumeLifecycleModes:
+    - Persistent

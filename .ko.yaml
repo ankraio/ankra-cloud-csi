@@ -1,0 +1,9 @@
+builds:
+  - id: ankra-cloud-csi
+    main: ./cmd/ankra-cloud-csi
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{.Env.VERSION}}
