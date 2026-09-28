@@ -42,8 +42,8 @@ helm-lint:
 	@rendered="$$(mktemp -d)"; \
 	$(RENDER) > "$$rendered/ankra-cloud-csi.yaml"; \
 	$(RENDER) --api-versions snapshot.storage.k8s.io/v1/VolumeSnapshotClass --show-only templates/volumesnapshotclass.yaml > "$$rendered/volumesnapshotclass.yaml"; \
-	if ! diff -ru $(DEPLOY) "$$rendered" >/dev/null; then \
-		echo "helm-lint: $(DEPLOY) is stale; run make manifests" >&2; diff -ru $(DEPLOY) "$$rendered" >&2; rm -rf "$$rendered"; exit 1; \
+	if ! diff -ruB $(DEPLOY) "$$rendered" >/dev/null; then \
+		echo "helm-lint: $(DEPLOY) is stale; run make manifests" >&2; diff -ruB $(DEPLOY) "$$rendered" >&2; rm -rf "$$rendered"; exit 1; \
 	fi; \
 	rm -rf "$$rendered"
 

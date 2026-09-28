@@ -14,4 +14,3 @@ metadata:
     snapshot.storage.kubernetes.io/is-default-class: "true"
 driver: csi.ankra.cloud
 deletionPolicy: Delete
-
