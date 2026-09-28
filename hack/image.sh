@@ -56,7 +56,7 @@ if [ "${PUSH}" = "true" ]; then
 else
 	apko build build/base.apko.yaml "ankra-cloud-csi-base:${first_tag}" "${work_directory}/base.tar" \
 		--sbom-path "${work_directory}"
-	KO_DEFAULTBASEIMAGE="cgr.dev/chainguard/static" KO_DOCKER_REPO="ko.local" \
+	KO_DEFAULTBASEIMAGE="cgr.dev/chainguard/static" KO_DOCKER_REPO="${IMAGE}" \
 		ko build ./cmd/ankra-cloud-csi --bare --platform="${platforms}" --tags="${ko_tags}" --push=false
 	echo "built ${IMAGE}:${first_tag} and its base without pushing"
 fi
