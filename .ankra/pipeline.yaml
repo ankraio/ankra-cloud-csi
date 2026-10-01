@@ -36,15 +36,17 @@ defaults:
   timeout: "30m"
   network: "egress-https"
   # Steps run unprivileged with a read-only root file system, so every cache and scratch directory is in the
-  # shared workspace.
+  # shared workspace. TMPDIR and XDG_CACHE_HOME are names Ankra reserves, so a run that declared one here is refused
+  # before checkout; the image stages, where apko needs a user cache directory, export them in the script instead.
   env:
+    # The workspace root belongs to another user, so git refuses VCS stamping and go build fails; no binary reads it.
+    GOFLAGS: "-buildvcs=false"
     GOTOOLCHAIN: "local"
     GOMAXPROCS: "2"
     GOPATH: "/workspace/.ci-cache/go"
     GOCACHE: "/workspace/.ci-cache/go-build"
     GOTMPDIR: "/workspace/.ci-tmp"
     GOLANGCI_LINT_CACHE: "/workspace/.ci-cache/golangci-lint"
-    XDG_CACHE_HOME: "/workspace/.ci-cache/xdg"
     XDG_CONFIG_HOME: "/workspace/.ci-tmp/config"
     HELM_CACHE_HOME: "/workspace/.ci-cache/helm"
     HELM_CONFIG_HOME: "/workspace/.ci-tmp/helm-config"
@@ -159,7 +161,8 @@ stages:
       set -eu
       mkdir -p "${GOTMPDIR}"
       TMPDIR="${GOTMPDIR}"
-      export TMPDIR
+      XDG_CACHE_HOME="${GOTMPDIR}/cache"
+      export TMPDIR XDG_CACHE_HOME
       go install github.com/google/ko@v0.19.1
       PATH="$(./hack/ci-apko.sh):${GOPATH}/bin:${PATH}"
       export PATH
@@ -191,7 +194,8 @@ stages:
       set -eu
       mkdir -p "${GOTMPDIR}"
       TMPDIR="${GOTMPDIR}"
-      export TMPDIR
+      XDG_CACHE_HOME="${GOTMPDIR}/cache"
+      export TMPDIR XDG_CACHE_HOME
       go install github.com/google/ko@v0.19.1
       go install github.com/google/go-containerregistry/cmd/crane@v0.22.1
       PATH="$(./hack/ci-apko.sh):${GOPATH}/bin:${PATH}"
