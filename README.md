@@ -154,7 +154,7 @@ The device serial is derived from the storage id until the generated `Storage` c
 Images are multi-arch (linux/amd64, linux/arm64) and published to the public registry `share.ankra.cloud`, pullable
 without credentials:
 
-- `share.ankra.cloud/library/ankra-cloud-csi:v<semver>` for each release tag, `:sha-<commit>` for each commit on main.
+- `share.ankra.cloud/library/ankra-cloud-csi:v<semver>` for each release, `:sha-<commit>` for each commit on main.
   Tags are immutable; there is no `latest`.
 - `share.ankra.cloud/base/ankra-cloud-csi-base`: the Wolfi base with the file system tools the node plugin runs
   (`build/base.apko.yaml`).
@@ -164,7 +164,8 @@ Each image carries an SPDX SBOM in the registry. The chart is published to the H
 
 CI runs on [Ankra Pipelines](.ankra/pipeline.yaml): go vet, the unit tests, the csi-sanity suite, golangci-lint,
 govulncheck and the chart gates on every push and pull request; the image build on every pull request; publishing on
-main and on `v*` tags. See [CHANGELOG.md](CHANGELOG.md) for what each release changed.
+main, where a commit that sets a new `appVersion` in the chart is the release. See [CHANGELOG.md](CHANGELOG.md) for
+what each release changed.
 
 ## Layout
 
