@@ -5,6 +5,22 @@ All notable changes to this project are documented here. The format follows
 
 ## Unreleased
 
+## Chart 0.2.0
+
+A chart release; the driver stays at v0.1.0.
+
+### Security
+
+- The pinned Kubernetes CSI sidecars move to current releases, which are built with newer Go and gRPC:
+  csi-provisioner v6.3.0, csi-attacher v4.13.0, csi-resizer v2.2.1, csi-snapshotter v8.6.0,
+  csi-node-driver-registrar v2.18.0 and livenessprobe v2.20.0.
+
+### Changed
+
+- The chart needs Kubernetes 1.34 or later (was 1.27), the minimum of csi-provisioner v6 and csi-resizer v2.
+- The controller's ClusterRole may update VolumeSnapshots, so csi-provisioner v6 can keep a snapshot from being
+  deleted while a volume is restored from it.
+
 ## v0.1.0
 
 First public release.

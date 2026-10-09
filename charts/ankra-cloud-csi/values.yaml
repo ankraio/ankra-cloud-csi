@@ -27,17 +27,17 @@ imagePullSecrets: []
 # Sidecars, pinned. Upgrade them together with the chart.
 sidecars:
   provisioner:
-    image: registry.k8s.io/sig-storage/csi-provisioner:v5.2.0
+    image: registry.k8s.io/sig-storage/csi-provisioner:v6.3.0
   attacher:
-    image: registry.k8s.io/sig-storage/csi-attacher:v4.8.1
+    image: registry.k8s.io/sig-storage/csi-attacher:v4.13.0
   resizer:
-    image: registry.k8s.io/sig-storage/csi-resizer:v1.13.2
+    image: registry.k8s.io/sig-storage/csi-resizer:v2.2.1
   snapshotter:
-    image: registry.k8s.io/sig-storage/csi-snapshotter:v8.2.1
+    image: registry.k8s.io/sig-storage/csi-snapshotter:v8.6.0
   nodeDriverRegistrar:
-    image: registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.13.0
+    image: registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.18.0
   livenessProbe:
-    image: registry.k8s.io/sig-storage/livenessprobe:v2.15.0
+    image: registry.k8s.io/sig-storage/livenessprobe:v2.20.0
 
 controller:
   replicas: 1
