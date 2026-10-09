@@ -13,6 +13,12 @@ import (
 	"github.com/ankraio/ankra-cloud-csi/internal/cloud"
 )
 
+// DefaultStorageTier is a zone's default storage tier unless SetZoneDefaultTier says otherwise.
+const DefaultStorageTier = "standard"
+
+// LocalStorageTier is the tier whose storages live on one compute node and attach only to servers on it.
+const LocalStorageTier = "local-nvme"
+
 // MaximumAttachedStorages mirrors the API's limit of storages on one server (domain.MaximumStorageDevices).
 const MaximumAttachedStorages = 16
 
@@ -23,7 +29,12 @@ type API struct {
 	snapshots  map[string]*cloud.Snapshot
 	servers    map[string]cloud.Server
 	operations map[string]cloud.Operation
-	sequence   int
+	// zoneDefaultTiers is the tier a storage created without one gets, per zone.
+	zoneDefaultTiers map[string]string
+	// serverNodes is the compute node each server runs on; localVolumeNodes the node each local storage lives on.
+	serverNodes      map[string]string
+	localVolumeNodes map[string]string
+	sequence         int
 	// Failures maps a method name ("CreateVolume", "AttachVolume", …) to the API status it answers with.
 	failures map[string]int
 	calls    map[string]int
@@ -36,6 +47,7 @@ var _ cloud.API = (*API)(nil)
 func New() *API {
 	return &API{volumes: map[string]*cloud.Volume{}, snapshots: map[string]*cloud.Snapshot{}, servers: map[string]cloud.Server{},
 		operations: map[string]cloud.Operation{}, failures: map[string]int{}, calls: map[string]int{},
+		zoneDefaultTiers: map[string]string{}, serverNodes: map[string]string{}, localVolumeNodes: map[string]string{},
 		now: func() time.Time { return time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC) }}
 }
 
@@ -44,6 +56,27 @@ func (fake *API) AddServer(server cloud.Server) {
 	fake.mutex.Lock()
 	defer fake.mutex.Unlock()
 	fake.servers[server.ID] = server
+}
+
+// SetZoneDefaultTier sets the tier storages created in zone without one get.
+func (fake *API) SetZoneDefaultTier(zone string, tier string) {
+	fake.mutex.Lock()
+	defer fake.mutex.Unlock()
+	fake.zoneDefaultTiers[zone] = tier
+}
+
+// PlaceServer records the compute node a server runs on.
+func (fake *API) PlaceServer(serverID string, node string) {
+	fake.mutex.Lock()
+	defer fake.mutex.Unlock()
+	fake.serverNodes[serverID] = node
+}
+
+// LocalVolumeNode is the compute node a local storage lives on.
+func (fake *API) LocalVolumeNode(volumeID string) string {
+	fake.mutex.Lock()
+	defer fake.mutex.Unlock()
+	return fake.localVolumeNodes[volumeID]
 }
 
 // AddVolume registers a storage as is.
@@ -160,8 +193,15 @@ func (fake *API) CreateVolume(_ context.Context, request cloud.CreateVolumeReque
 	if failure := fake.enter("CreateVolume"); failure != nil {
 		return cloud.Volume{}, cloud.Operation{}, failure
 	}
-	if request.Zone == "" || request.Title == "" || request.Tier == "" {
-		return cloud.Volume{}, cloud.Operation{}, cloud.NewError(http.StatusBadRequest, "zone, title and tier are required")
+	if request.Zone == "" || request.Title == "" {
+		return cloud.Volume{}, cloud.Operation{}, cloud.NewError(http.StatusBadRequest, "zone and title are required")
+	}
+	tier := request.Tier
+	if tier == "" {
+		tier = fake.zoneDefaultTiers[request.Zone]
+	}
+	if tier == "" {
+		tier = DefaultStorageTier
 	}
 	size := request.SizeGibibytes
 	switch {
@@ -182,10 +222,25 @@ func (fake *API) CreateVolume(_ context.Context, request cloud.CreateVolumeReque
 		return cloud.Volume{}, cloud.Operation{}, cloud.NewError(http.StatusBadRequest, "size_gibibytes is required")
 	}
 	identifier := fake.nextIdentifier("5a")
-	volume := &cloud.Volume{ID: identifier, Zone: request.Zone, Title: request.Title, Tier: request.Tier,
+	if tier == LocalStorageTier {
+		fake.localVolumeNodes[identifier] = fake.localNode(request)
+	}
+	volume := &cloud.Volume{ID: identifier, Zone: request.Zone, Title: request.Title, Tier: tier,
 		State: cloud.StorageStateOnline, SizeGibibytes: size, DeviceSerial: cloud.DeviceSerialFor(identifier), CreatedAt: fake.now()}
 	fake.volumes[identifier] = volume
 	return *volume, fake.succeeded(), nil
+}
+
+// localNode is where a new local storage lands: next to the placement server, else on the source's node, else on
+// a node no server runs on, as the API's least-loaded choice can be.
+func (fake *API) localNode(request cloud.CreateVolumeRequest) string {
+	if node, isPlaced := fake.serverNodes[request.PlacementServerID]; isPlaced {
+		return node
+	}
+	if node, isPresent := fake.localVolumeNodes[request.SourceStorageID]; isPresent {
+		return node
+	}
+	return "least-loaded-node"
 }
 
 // DeleteVolume deletes a detached storage.
@@ -203,6 +258,7 @@ func (fake *API) DeleteVolume(_ context.Context, volumeID string) (cloud.Operati
 		return cloud.Operation{}, cloud.NewError(http.StatusConflict, "the storage is attached")
 	}
 	delete(fake.volumes, volumeID)
+	delete(fake.localVolumeNodes, volumeID)
 	return fake.succeeded(), nil
 }
 
@@ -226,6 +282,10 @@ func (fake *API) AttachVolume(_ context.Context, volumeID string, serverID strin
 	}
 	if volume.Zone != server.Zone {
 		return cloud.Operation{}, cloud.NewError(http.StatusConflict, "the storage and the server are in different zones")
+	}
+	if storageNode, isLocal := fake.localVolumeNodes[volumeID]; isLocal && storageNode != fake.serverNodes[serverID] {
+		return cloud.Operation{}, cloud.NewError(http.StatusConflict, fmt.Sprintf(
+			"local-nvme volumes live on one node; the storage is on node %s and the server runs on node %s", storageNode, fake.serverNodes[serverID]))
 	}
 	attached := 1
 	for _, other := range fake.volumes {

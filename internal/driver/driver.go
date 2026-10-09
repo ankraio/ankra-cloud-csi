@@ -41,8 +41,6 @@ const (
 	// PublishContextDeviceSerial hands the virtio serial from ControllerPublish to the node.
 	PublishContextDeviceSerial = "deviceSerial"
 
-	// DefaultTier is used when a StorageClass names none.
-	DefaultTier = "standard"
 	// TierLocalNVMe is the Ankra Local tier: a volume on the compute node's own disks, pinned to it.
 	TierLocalNVMe = "local-nvme"
 

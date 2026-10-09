@@ -88,7 +88,8 @@ func TestGeneratedOperations(t *testing.T) {
 	if _, getError := client.GetVolume(ctx, "vol-1"); getError != nil {
 		t.Fatalf("GetVolume: %v", getError)
 	}
-	_, operation, createError := client.CreateVolume(ctx, CreateVolumeRequest{Zone: "fsn1", Title: "pvc-1", Tier: "standard", SizeGibibytes: 10})
+	_, operation, createError := client.CreateVolume(ctx, CreateVolumeRequest{Zone: "fsn1", Title: "pvc-1", Tier: "local-nvme", SizeGibibytes: 10,
+		PlacementServerID: "srv-1"})
 	if createError != nil || operation.ID != "op-1" || operation.Status != OperationStatusRunning {
 		t.Fatalf("CreateVolume: %+v %v", operation, createError)
 	}
@@ -113,8 +114,11 @@ func TestGeneratedOperations(t *testing.T) {
 		}
 	}
 	create := (*calls)[2]
-	if create.body["title"] != "pvc-1" || create.body["tier"] != "standard" || create.body["size_gibibytes"] != float64(10) {
+	if create.body["title"] != "pvc-1" || create.body["tier"] != "local-nvme" || create.body["size_gibibytes"] != float64(10) {
 		t.Fatalf("create body %v", create.body)
+	}
+	if placement, _ := create.body["placement"].(map[string]any); placement["server_id"] != "srv-1" {
+		t.Fatalf("create placement %v", create.body["placement"])
 	}
 	if _, hasLabels := create.body["labels"]; hasLabels {
 		t.Fatal("create_storage does not accept labels yet")
@@ -165,6 +169,16 @@ func TestPendingOperationsUseTheirRoutes(t *testing.T) {
 	}
 	if _, hasSize := restore.body["size_gibibytes"]; hasSize {
 		t.Fatal("a restore without a size must let the API use the snapshot's")
+	}
+	if _, _, defaultTierError := client.CreateVolume(ctx, CreateVolumeRequest{Zone: "fsn1", Title: "pvc-3", SizeGibibytes: 1}); defaultTierError != nil {
+		t.Fatalf("CreateVolume with the zone's default tier: %v", defaultTierError)
+	}
+	zoneDefault := (*calls)[5]
+	if _, hasTier := zoneDefault.body["tier"]; hasTier {
+		t.Fatalf("a request without a tier must let the API use the zone's default: %v", zoneDefault.body)
+	}
+	if _, hasPlacement := zoneDefault.body["placement"]; hasPlacement {
+		t.Fatalf("a request without a placement server sent one: %v", zoneDefault.body)
 	}
 
 	_, missingError := client.GetSnapshot(ctx, "absent")
