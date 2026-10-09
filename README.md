@@ -7,6 +7,8 @@ the public Ankra Cloud API, with a customer API token.
 
 The driver is in preview. Full documentation: <https://cloud.ankra.app/docs/kubernetes-csi>.
 
+The chart needs Kubernetes 1.34 or later, the minimum of the Kubernetes CSI sidecars it pins.
+
 ## Quick start
 
 ```bash
@@ -26,7 +28,7 @@ helm install ankra-cloud-csi ankra/ankra-cloud-csi -n kube-system --set api.exis
 The chart is also published as an OCI artifact:
 
 ```bash
-helm install ankra-cloud-csi oci://share.ankra.cloud/charts/ankra-cloud-csi --version 0.1.0 -n kube-system \
+helm install ankra-cloud-csi oci://share.ankra.cloud/charts/ankra-cloud-csi --version 0.2.0 -n kube-system \
   --set api.existingSecret=ankra-cloud-csi-api
 ```
 

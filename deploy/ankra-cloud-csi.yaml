@@ -10,7 +10,7 @@ metadata:
     app.kubernetes.io/instance: ankra-cloud-csi
     app.kubernetes.io/version: "v0.1.0"
     app.kubernetes.io/managed-by: Helm
-    helm.sh/chart: ankra-cloud-csi-0.1.0
+    helm.sh/chart: ankra-cloud-csi-0.2.0
 ---
 # Source: ankra-cloud-csi/templates/rbac.yaml
 apiVersion: v1
@@ -23,7 +23,7 @@ metadata:
     app.kubernetes.io/instance: ankra-cloud-csi
     app.kubernetes.io/version: "v0.1.0"
     app.kubernetes.io/managed-by: Helm
-    helm.sh/chart: ankra-cloud-csi-0.1.0
+    helm.sh/chart: ankra-cloud-csi-0.2.0
 ---
 # Source: ankra-cloud-csi/templates/storageclasses.yaml
 apiVersion: storage.k8s.io/v1
@@ -35,7 +35,7 @@ metadata:
     app.kubernetes.io/instance: ankra-cloud-csi
     app.kubernetes.io/version: "v0.1.0"
     app.kubernetes.io/managed-by: Helm
-    helm.sh/chart: ankra-cloud-csi-0.1.0
+    helm.sh/chart: ankra-cloud-csi-0.2.0
   annotations:
     storageclass.kubernetes.io/is-default-class: "true"
 provisioner: csi.ankra.cloud
@@ -57,7 +57,7 @@ metadata:
     app.kubernetes.io/instance: ankra-cloud-csi
     app.kubernetes.io/version: "v0.1.0"
     app.kubernetes.io/managed-by: Helm
-    helm.sh/chart: ankra-cloud-csi-0.1.0
+    helm.sh/chart: ankra-cloud-csi-0.2.0
 provisioner: csi.ankra.cloud
 parameters:
   tier: "maxiops"
@@ -77,7 +77,7 @@ metadata:
     app.kubernetes.io/instance: ankra-cloud-csi
     app.kubernetes.io/version: "v0.1.0"
     app.kubernetes.io/managed-by: Helm
-    helm.sh/chart: ankra-cloud-csi-0.1.0
+    helm.sh/chart: ankra-cloud-csi-0.2.0
 provisioner: csi.ankra.cloud
 parameters:
   tier: "hdd"
@@ -97,7 +97,7 @@ metadata:
     app.kubernetes.io/instance: ankra-cloud-csi
     app.kubernetes.io/version: "v0.1.0"
     app.kubernetes.io/managed-by: Helm
-    helm.sh/chart: ankra-cloud-csi-0.1.0
+    helm.sh/chart: ankra-cloud-csi-0.2.0
 provisioner: csi.ankra.cloud
 parameters:
   tier: "local-nvme"
@@ -118,7 +118,7 @@ metadata:
     app.kubernetes.io/instance: ankra-cloud-csi
     app.kubernetes.io/version: "v0.1.0"
     app.kubernetes.io/managed-by: Helm
-    helm.sh/chart: ankra-cloud-csi-0.1.0
+    helm.sh/chart: ankra-cloud-csi-0.2.0
 rules:
   - apiGroups: [""]
     resources: ["persistentvolumes"]
@@ -144,8 +144,12 @@ rules:
   - apiGroups: ["storage.k8s.io"]
     resources: ["volumeattachments/status"]
     verbs: ["patch"]
+  # update: external-provisioner v6 holds a finalizer on a VolumeSnapshot while a volume is restored from it.
   - apiGroups: ["snapshot.storage.k8s.io"]
-    resources: ["volumesnapshots", "volumesnapshotclasses"]
+    resources: ["volumesnapshots"]
+    verbs: ["get", "list", "watch", "update"]
+  - apiGroups: ["snapshot.storage.k8s.io"]
+    resources: ["volumesnapshotclasses"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["snapshot.storage.k8s.io"]
     resources: ["volumesnapshotcontents"]
@@ -167,7 +171,7 @@ metadata:
     app.kubernetes.io/instance: ankra-cloud-csi
     app.kubernetes.io/version: "v0.1.0"
     app.kubernetes.io/managed-by: Helm
-    helm.sh/chart: ankra-cloud-csi-0.1.0
+    helm.sh/chart: ankra-cloud-csi-0.2.0
 subjects:
   - kind: ServiceAccount
     name: ankra-cloud-csi-controller
@@ -189,7 +193,7 @@ metadata:
     app.kubernetes.io/instance: ankra-cloud-csi
     app.kubernetes.io/version: "v0.1.0"
     app.kubernetes.io/managed-by: Helm
-    helm.sh/chart: ankra-cloud-csi-0.1.0
+    helm.sh/chart: ankra-cloud-csi-0.2.0
 rules:
   - apiGroups: ["coordination.k8s.io"]
     resources: ["leases"]
@@ -206,7 +210,7 @@ metadata:
     app.kubernetes.io/instance: ankra-cloud-csi
     app.kubernetes.io/version: "v0.1.0"
     app.kubernetes.io/managed-by: Helm
-    helm.sh/chart: ankra-cloud-csi-0.1.0
+    helm.sh/chart: ankra-cloud-csi-0.2.0
 subjects:
   - kind: ServiceAccount
     name: ankra-cloud-csi-controller
@@ -227,7 +231,7 @@ metadata:
     app.kubernetes.io/instance: ankra-cloud-csi
     app.kubernetes.io/version: "v0.1.0"
     app.kubernetes.io/managed-by: Helm
-    helm.sh/chart: ankra-cloud-csi-0.1.0
+    helm.sh/chart: ankra-cloud-csi-0.2.0
     app.kubernetes.io/component: node
 spec:
   selector:
@@ -246,7 +250,7 @@ spec:
         app.kubernetes.io/instance: ankra-cloud-csi
         app.kubernetes.io/version: "v0.1.0"
         app.kubernetes.io/managed-by: Helm
-        helm.sh/chart: ankra-cloud-csi-0.1.0
+        helm.sh/chart: ankra-cloud-csi-0.2.0
         app.kubernetes.io/component: node
     spec:
       serviceAccountName: ankra-cloud-csi-node
@@ -304,7 +308,7 @@ spec:
               cpu: 10m
               memory: 32Mi
         - name: node-driver-registrar
-          image: registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.13.0
+          image: registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.18.0
           args:
             - --csi-address=/csi/csi.sock
             - --kubelet-registration-path=/var/lib/kubelet/plugins/csi.ankra.cloud/csi.sock
@@ -327,7 +331,7 @@ spec:
             capabilities:
               drop: ["ALL"]
         - name: liveness-probe
-          image: registry.k8s.io/sig-storage/livenessprobe:v2.15.0
+          image: registry.k8s.io/sig-storage/livenessprobe:v2.20.0
           args:
             - --csi-address=/csi/csi.sock
             - --http-endpoint=:9809
@@ -372,7 +376,7 @@ metadata:
     app.kubernetes.io/instance: ankra-cloud-csi
     app.kubernetes.io/version: "v0.1.0"
     app.kubernetes.io/managed-by: Helm
-    helm.sh/chart: ankra-cloud-csi-0.1.0
+    helm.sh/chart: ankra-cloud-csi-0.2.0
     app.kubernetes.io/component: controller
 spec:
   replicas: 1
@@ -388,7 +392,7 @@ spec:
         app.kubernetes.io/instance: ankra-cloud-csi
         app.kubernetes.io/version: "v0.1.0"
         app.kubernetes.io/managed-by: Helm
-        helm.sh/chart: ankra-cloud-csi-0.1.0
+        helm.sh/chart: ankra-cloud-csi-0.2.0
         app.kubernetes.io/component: controller
     spec:
       serviceAccountName: ankra-cloud-csi-controller
@@ -445,7 +449,7 @@ spec:
               cpu: 10m
               memory: 32Mi
         - name: csi-provisioner
-          image: registry.k8s.io/sig-storage/csi-provisioner:v5.2.0
+          image: registry.k8s.io/sig-storage/csi-provisioner:v6.3.0
           args:
             - --csi-address=/csi/csi.sock
             - --feature-gates=Topology=true
@@ -464,7 +468,7 @@ spec:
             capabilities:
               drop: ["ALL"]
         - name: csi-attacher
-          image: registry.k8s.io/sig-storage/csi-attacher:v4.8.1
+          image: registry.k8s.io/sig-storage/csi-attacher:v4.13.0
           args:
             - --csi-address=/csi/csi.sock
             - --leader-election
@@ -479,7 +483,7 @@ spec:
             capabilities:
               drop: ["ALL"]
         - name: csi-resizer
-          image: registry.k8s.io/sig-storage/csi-resizer:v1.13.2
+          image: registry.k8s.io/sig-storage/csi-resizer:v2.2.1
           args:
             - --csi-address=/csi/csi.sock
             - --leader-election
@@ -495,7 +499,7 @@ spec:
             capabilities:
               drop: ["ALL"]
         - name: csi-snapshotter
-          image: registry.k8s.io/sig-storage/csi-snapshotter:v8.2.1
+          image: registry.k8s.io/sig-storage/csi-snapshotter:v8.6.0
           args:
             - --csi-address=/csi/csi.sock
             - --leader-election
@@ -511,7 +515,7 @@ spec:
             capabilities:
               drop: ["ALL"]
         - name: liveness-probe
-          image: registry.k8s.io/sig-storage/livenessprobe:v2.15.0
+          image: registry.k8s.io/sig-storage/livenessprobe:v2.20.0
           args:
             - --csi-address=/csi/csi.sock
             - --http-endpoint=:9808
@@ -537,7 +541,7 @@ metadata:
     app.kubernetes.io/instance: ankra-cloud-csi
     app.kubernetes.io/version: "v0.1.0"
     app.kubernetes.io/managed-by: Helm
-    helm.sh/chart: ankra-cloud-csi-0.1.0
+    helm.sh/chart: ankra-cloud-csi-0.2.0
 spec:
   attachRequired: true
   podInfoOnMount: false

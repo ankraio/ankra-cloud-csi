@@ -2,9 +2,9 @@ apiVersion: v2
 name: ankra-cloud-csi
 description: CSI driver csi.ankra.cloud for Ankra Cloud block storage (dynamic volumes per tier, snapshots, clones, online expansion).
 type: application
-version: 0.1.0
+version: 0.2.0
 appVersion: "v0.1.0"
-kubeVersion: ">=1.27.0-0"
+kubeVersion: ">=1.34.0-0"
 icon: https://ankra.io/images/apple-touch-icon.png
 home: https://github.com/ankraio/ankra-cloud-csi
 sources:
@@ -28,7 +28,7 @@ annotations:
   artifacthub.io/category: storage
   artifacthub.io/prerelease: "false"
   artifacthub.io/operator: "false"
-  artifacthub.io/containsSecurityUpdates: "false"
+  artifacthub.io/containsSecurityUpdates: "true"
   artifacthub.io/maintainers: |
     - name: Ankra AB
       email: admin@ankra.io
@@ -48,19 +48,21 @@ annotations:
         - linux/amd64
         - linux/arm64
     - name: csi-provisioner
-      image: registry.k8s.io/sig-storage/csi-provisioner:v5.2.0
+      image: registry.k8s.io/sig-storage/csi-provisioner:v6.3.0
     - name: csi-attacher
-      image: registry.k8s.io/sig-storage/csi-attacher:v4.8.1
+      image: registry.k8s.io/sig-storage/csi-attacher:v4.13.0
     - name: csi-resizer
-      image: registry.k8s.io/sig-storage/csi-resizer:v1.13.2
+      image: registry.k8s.io/sig-storage/csi-resizer:v2.2.1
     - name: csi-snapshotter
-      image: registry.k8s.io/sig-storage/csi-snapshotter:v8.2.1
+      image: registry.k8s.io/sig-storage/csi-snapshotter:v8.6.0
     - name: csi-node-driver-registrar
-      image: registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.13.0
+      image: registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.18.0
     - name: livenessprobe
-      image: registry.k8s.io/sig-storage/livenessprobe:v2.15.0
+      image: registry.k8s.io/sig-storage/livenessprobe:v2.20.0
   artifacthub.io/changes: |
-    - kind: added
-      description: "First public release: dynamic provisioning for the standard, maxiops, hdd and local-nvme tiers, hot-plug attach and detach, online expansion, snapshots, restore from a snapshot and clones."
-    - kind: added
-      description: "Multi-arch driver image (linux/amd64, linux/arm64) on share.ankra.cloud with an SPDX SBOM."
+    - kind: security
+      description: "Sidecars moved to current Kubernetes CSI releases: csi-provisioner v6.3.0, csi-attacher v4.13.0, csi-resizer v2.2.1, csi-snapshotter v8.6.0, csi-node-driver-registrar v2.18.0 and livenessprobe v2.20.0."
+    - kind: changed
+      description: "The chart now needs Kubernetes 1.34 or later, the minimum of csi-provisioner v6 and csi-resizer v2."
+    - kind: changed
+      description: "The controller may update VolumeSnapshots, so csi-provisioner can keep a snapshot from being deleted while a volume is restored from it."
