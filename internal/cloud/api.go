@@ -97,12 +97,15 @@ func (operation Operation) IsFinished() bool {
 // CreateVolumeRequest creates an empty storage, a clone of a storage, or a storage from a snapshot. At most one
 // source is set.
 type CreateVolumeRequest struct {
-	Zone             string
-	Title            string
+	Zone  string
+	Title string
+	// Tier is empty for the zone's default storage tier.
 	Tier             string
 	SizeGibibytes    int64
 	SourceStorageID  string
 	SourceSnapshotID string
+	// PlacementServerID puts a local-nvme storage on the compute node that runs this server; other tiers ignore it.
+	PlacementServerID string
 	// Labels are sent once storages carry labels; until then the title is the driver's idempotency key.
 	Labels map[string]string
 }

@@ -62,9 +62,6 @@ func (driver *Driver) CreateVolume(ctx context.Context, request *csi.CreateVolum
 		return nil, sizeError
 	}
 	tier := request.GetParameters()[ParameterTier]
-	if tier == "" {
-		tier = DefaultTier
-	}
 	release, isLocked := driver.lock("name/" + name)
 	if !isLocked {
 		return nil, status.Errorf(codes.Aborted, "an operation on volume %s is in progress", name)
@@ -103,32 +100,30 @@ func (driver *Driver) CreateVolume(ctx context.Context, request *csi.CreateVolum
 		if !fitsCapacityRange(existing.SizeGibibytes, request.GetCapacityRange()) {
 			return nil, status.Errorf(codes.AlreadyExists, "volume %s exists with %d GiB, outside the requested range", name, existing.SizeGibibytes)
 		}
-		if existing.Tier != tier {
+		if tier != "" && existing.Tier != tier {
 			return nil, status.Errorf(codes.AlreadyExists, "volume %s exists on tier %s, not %s", name, existing.Tier, tier)
 		}
 		ready, waitError := driver.waitForVolume(ctx, *existing)
 		if waitError != nil {
 			return nil, waitError
 		}
-		return &csi.CreateVolumeResponse{Volume: driver.csiVolume(ready, tier, nodeFromTopology(request.GetAccessibilityRequirements(), ready.Zone), request)}, nil
+		return &csi.CreateVolumeResponse{Volume: driver.csiVolume(ready, nodeFromTopology(request.GetAccessibilityRequirements(), ready.Zone), request)}, nil
 	}
 
 	zone, zoneError := driver.chooseZone(request.GetAccessibilityRequirements(), source.zone)
 	if zoneError != nil {
 		return nil, zoneError
 	}
-	node := ""
-	if tier == TierLocalNVMe {
-		node = nodeFromTopology(request.GetAccessibilityRequirements(), zone)
-		if node == "" {
-			return nil, status.Errorf(codes.InvalidArgument,
-				"tier %s needs the selected node in the accessibility requirements: use volumeBindingMode WaitForFirstConsumer", TierLocalNVMe)
-		}
+	node := nodeFromTopology(request.GetAccessibilityRequirements(), zone)
+	if tier == TierLocalNVMe && node == "" {
+		return nil, status.Errorf(codes.InvalidArgument,
+			"tier %s needs the selected node in the accessibility requirements: use volumeBindingMode WaitForFirstConsumer", TierLocalNVMe)
 	}
 	created, operation, createError := driver.options.API.CreateVolume(ctx, cloud.CreateVolumeRequest{
 		Zone: zone, Title: name, Tier: tier, SizeGibibytes: sizeGibibytes,
 		SourceStorageID: source.storageID, SourceSnapshotID: source.snapshotID,
-		Labels: map[string]string{VolumeNameLabel: name},
+		PlacementServerID: placementServer(tier, node, source),
+		Labels:            map[string]string{VolumeNameLabel: name},
 	})
 	if createError != nil {
 		return nil, apiStatus(createError, "create volume %s", name)
@@ -140,7 +135,19 @@ func (driver *Driver) CreateVolume(ctx context.Context, request *csi.CreateVolum
 	if getError != nil {
 		return nil, apiStatus(getError, "read volume %s", created.ID)
 	}
-	return &csi.CreateVolumeResponse{Volume: driver.csiVolume(ready, tier, node, request)}, nil
+	return &csi.CreateVolumeResponse{Volume: driver.csiVolume(ready, node, request)}, nil
+}
+
+// placementServer is the server whose compute node a new local-nvme storage lands on: the selected node, for a tier
+// that is local-nvme or left to the zone's default. A clone stays on its source's node and takes no placement.
+func placementServer(tier string, node string, source volumeSource) string {
+	if source.storageID != "" || source.snapshotID != "" {
+		return ""
+	}
+	if tier != TierLocalNVMe && tier != "" {
+		return ""
+	}
+	return node
 }
 
 type volumeSource struct {
@@ -248,10 +255,10 @@ func nodeFromTopology(requirements *csi.TopologyRequirement, zone string) string
 	return ""
 }
 
-func (driver *Driver) csiVolume(volume cloud.Volume, tier string, node string, request *csi.CreateVolumeRequest) *csi.Volume {
+func (driver *Driver) csiVolume(volume cloud.Volume, node string, request *csi.CreateVolumeRequest) *csi.Volume {
 	topology := map[string]string{TopologyZoneKey: volume.Zone}
-	volumeContext := map[string]string{ParameterTier: tier, TopologyZoneKey: volume.Zone}
-	if tier == TierLocalNVMe && node != "" {
+	volumeContext := map[string]string{ParameterTier: volume.Tier, TopologyZoneKey: volume.Zone}
+	if volume.Tier == TierLocalNVMe && node != "" {
 		topology[TopologyNodeKey] = node
 		volumeContext[TopologyNodeKey] = node
 	}

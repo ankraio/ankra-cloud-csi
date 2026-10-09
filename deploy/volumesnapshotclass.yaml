@@ -7,9 +7,9 @@ metadata:
   labels:
     app.kubernetes.io/name: ankra-cloud-csi
     app.kubernetes.io/instance: ankra-cloud-csi
-    app.kubernetes.io/version: "v0.1.0"
+    app.kubernetes.io/version: "v0.2.0"
     app.kubernetes.io/managed-by: Helm
-    helm.sh/chart: ankra-cloud-csi-0.1.0
+    helm.sh/chart: ankra-cloud-csi-0.2.0
   annotations:
     snapshot.storage.kubernetes.io/is-default-class: "true"
 driver: csi.ankra.cloud

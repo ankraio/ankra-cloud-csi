@@ -39,7 +39,7 @@ func createRequest(name string, requiredBytes int64, parameters map[string]strin
 		VolumeCapabilities: []*csi.VolumeCapability{mountCapability()}, Parameters: parameters}
 }
 
-func TestCreateVolumeRoundsUpToWholeGibibytesWithTheDefaultTier(t *testing.T) {
+func TestCreateVolumeRoundsUpToWholeGibibytesWithTheZoneDefaultTier(t *testing.T) {
 	api := cloudfake.New()
 	csiDriver := newTestDriver(t, api, newFakeHost())
 	response, createError := csiDriver.CreateVolume(context.Background(), createRequest("pvc-a", 1500<<20, nil))
@@ -47,7 +47,7 @@ func TestCreateVolumeRoundsUpToWholeGibibytesWithTheDefaultTier(t *testing.T) {
 		t.Fatalf("CreateVolume: %v", createError)
 	}
 	volume, _ := api.Volume(response.GetVolume().GetVolumeId())
-	if volume.SizeGibibytes != 2 || volume.Tier != DefaultTier || volume.Zone != testZone || volume.Title != "pvc-a" {
+	if volume.SizeGibibytes != 2 || volume.Tier != cloudfake.DefaultStorageTier || volume.Zone != testZone || volume.Title != "pvc-a" {
 		t.Fatalf("storage %+v", volume)
 	}
 	if response.GetVolume().GetCapacityBytes() != 2*gibibyte {
@@ -91,7 +91,7 @@ func TestCreateVolumeIsIdempotentByName(t *testing.T) {
 
 func TestCreateVolumeReplacesAStorageThatFailedToProvision(t *testing.T) {
 	api := cloudfake.New()
-	api.AddVolume(cloud.Volume{ID: "5a000000-0000-4000-8000-000000000001", Zone: testZone, Title: "pvc-broken", Tier: DefaultTier,
+	api.AddVolume(cloud.Volume{ID: "5a000000-0000-4000-8000-000000000001", Zone: testZone, Title: "pvc-broken", Tier: cloudfake.DefaultStorageTier,
 		State: cloud.StorageStateError, SizeGibibytes: 1})
 	csiDriver := newTestDriver(t, api, newFakeHost())
 	response, createError := csiDriver.CreateVolume(context.Background(), createRequest("pvc-broken", gibibyte, nil))
@@ -140,6 +140,89 @@ func TestCreateVolumePinsLocalNVMeToTheSelectedNode(t *testing.T) {
 	_, missingNodeError := csiDriver.CreateVolume(context.Background(), createRequest("pvc-local-immediate", gibibyte,
 		map[string]string{ParameterTier: TierLocalNVMe}))
 	expectCode(t, missingNodeError, codes.InvalidArgument)
+}
+
+func TestCreateVolumePlacesLocalNVMeNextToTheSelectedServer(t *testing.T) {
+	const otherServerID = "01a0d058-e588-7fff-8000-000000000202"
+	api := cloudfake.New()
+	api.AddServer(cloud.Server{ID: otherServerID, Zone: testZone, State: "running"})
+	api.PlaceServer(testServerID, "node-selected")
+	api.PlaceServer(otherServerID, "node-other")
+	csiDriver := newTestDriver(t, api, newFakeHost())
+	request := createRequest("pvc-local-placed", gibibyte, map[string]string{ParameterTier: TierLocalNVMe})
+	request.AccessibilityRequirements = localTopology(testServerID)
+	response, createError := csiDriver.CreateVolume(context.Background(), request)
+	if createError != nil {
+		t.Fatalf("CreateVolume: %v", createError)
+	}
+	volumeID := response.GetVolume().GetVolumeId()
+	if node := api.LocalVolumeNode(volumeID); node != "node-selected" {
+		t.Fatalf("the storage landed on %s, not next to the selected server", node)
+	}
+	if _, publishError := csiDriver.ControllerPublishVolume(context.Background(), &csi.ControllerPublishVolumeRequest{
+		VolumeId: volumeID, NodeId: testServerID, VolumeCapability: mountCapability()}); publishError != nil {
+		t.Fatalf("ControllerPublishVolume on the selected server: %v", publishError)
+	}
+}
+
+func TestCreateVolumeWithoutATierUsesTheZoneDefaultAndPinsALocalDefault(t *testing.T) {
+	api := cloudfake.New()
+	api.SetZoneDefaultTier(testZone, TierLocalNVMe)
+	api.PlaceServer(testServerID, "node-selected")
+	csiDriver := newTestDriver(t, api, newFakeHost())
+	request := createRequest("pvc-zone-default", gibibyte, nil)
+	request.AccessibilityRequirements = localTopology(testServerID)
+	response, createError := csiDriver.CreateVolume(context.Background(), request)
+	if createError != nil {
+		t.Fatalf("CreateVolume: %v", createError)
+	}
+	volume := response.GetVolume()
+	if volume.GetVolumeContext()[ParameterTier] != TierLocalNVMe || volume.GetAccessibleTopology()[0].GetSegments()[TopologyNodeKey] != testServerID {
+		t.Fatalf("volume %v", volume)
+	}
+	if node := api.LocalVolumeNode(volume.GetVolumeId()); node != "node-selected" {
+		t.Fatalf("the zone-default local storage landed on %s", node)
+	}
+	again, againError := csiDriver.CreateVolume(context.Background(), request)
+	if againError != nil || again.GetVolume().GetVolumeId() != volume.GetVolumeId() {
+		t.Fatalf("a repeated zone-default request: %v, %v", again, againError)
+	}
+
+	standardRequest := createRequest("pvc-zone-standard", gibibyte, nil)
+	standardRequest.AccessibilityRequirements = localTopology(testServerID)
+	api.SetZoneDefaultTier(testZone, cloudfake.DefaultStorageTier)
+	standard, standardError := csiDriver.CreateVolume(context.Background(), standardRequest)
+	if standardError != nil {
+		t.Fatalf("CreateVolume: %v", standardError)
+	}
+	if segments := standard.GetVolume().GetAccessibleTopology()[0].GetSegments(); segments[TopologyNodeKey] != "" ||
+		standard.GetVolume().GetVolumeContext()[ParameterTier] != cloudfake.DefaultStorageTier {
+		t.Fatalf("a zone-default standard volume %v", standard.GetVolume())
+	}
+}
+
+func TestPlacementServerIsOnlyForNewLocalOrZoneDefaultVolumes(t *testing.T) {
+	cases := []struct {
+		tier   string
+		source volumeSource
+		want   string
+	}{
+		{tier: TierLocalNVMe, want: testServerID},
+		{tier: "", want: testServerID},
+		{tier: "standard", want: ""},
+		{tier: TierLocalNVMe, source: volumeSource{storageID: "5a-source"}, want: ""},
+		{tier: TierLocalNVMe, source: volumeSource{snapshotID: "5b-source"}, want: ""},
+	}
+	for _, testCase := range cases {
+		if got := placementServer(testCase.tier, testServerID, testCase.source); got != testCase.want {
+			t.Fatalf("placementServer(%q, %+v) = %q, want %q", testCase.tier, testCase.source, got, testCase.want)
+		}
+	}
+}
+
+func localTopology(serverID string) *csi.TopologyRequirement {
+	segments := map[string]string{TopologyZoneKey: testZone, TopologyNodeKey: serverID}
+	return &csi.TopologyRequirement{Requisite: []*csi.Topology{{Segments: segments}}, Preferred: []*csi.Topology{{Segments: segments}}}
 }
 
 func TestCreateVolumeFromASnapshot(t *testing.T) {

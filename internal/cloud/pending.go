@@ -14,7 +14,7 @@ import (
 	"github.com/ankraio/ankra-cloud-csi/internal/ankraapi"
 )
 
-// The operations the API is gaining alongside this driver: snapshots and a storage created from a snapshot. Each call
+// The operations the API is gaining alongside this driver: snapshots. Each call
 // names its operationId. Once `make sync-client` has regenerated the client from a specification that has the
 // operation, the call goes through ankraapi.Client.Call with the specification's method and path; until then it is a
 // plain HTTP request with the method and path below. Swapping to the typed methods later only touches this file.
@@ -31,7 +31,6 @@ var (
 	routeListStorageSnapshots = pendingRoute{"list_storage_snapshots", http.MethodGet, "/v1/storages/{id}/snapshots", []string{"id"}}
 	routeGetSnapshot          = pendingRoute{"get_snapshot", http.MethodGet, "/v1/snapshots/{id}", []string{"id"}}
 	routeDeleteSnapshot       = pendingRoute{"delete_snapshot", http.MethodDelete, "/v1/snapshots/{id}", []string{"id"}}
-	routeCreateStorage        = pendingRoute{"create_storage", http.MethodPost, "/v1/storages", nil}
 )
 
 type pendingTransport struct {
@@ -117,21 +116,6 @@ func (transport *pendingTransport) deleteSnapshot(ctx context.Context, snapshotI
 		return Operation{}, callError
 	}
 	return operationFromAPI(answer.Operation), nil
-}
-
-func (transport *pendingTransport) createVolumeFromSnapshot(ctx context.Context, request CreateVolumeRequest) (Volume, Operation, error) {
-	body := map[string]any{"zone": request.Zone, "title": request.Title, "tier": request.Tier, "source_snapshot_id": request.SourceSnapshotID}
-	if request.SizeGibibytes > 0 {
-		body["size_gibibytes"] = request.SizeGibibytes
-	}
-	var answer struct {
-		Storage   ankraapi.Storage   `json:"storage"`
-		Operation ankraapi.Operation `json:"operation"`
-	}
-	if callError := transport.call(ctx, routeCreateStorage, nil, nil, body, &answer); callError != nil {
-		return Volume{}, Operation{}, callError
-	}
-	return volumeFromStorage(answer.Storage), operationFromAPI(answer.Operation), nil
 }
 
 // call runs one pending operation and decodes its JSON answer into result.

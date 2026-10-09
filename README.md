@@ -26,7 +26,7 @@ helm install ankra-cloud-csi ankra/ankra-cloud-csi -n kube-system --set api.exis
 The chart is also published as an OCI artifact:
 
 ```bash
-helm install ankra-cloud-csi oci://share.ankra.cloud/charts/ankra-cloud-csi --version 0.1.0 -n kube-system \
+helm install ankra-cloud-csi oci://share.ankra.cloud/charts/ankra-cloud-csi --version 0.2.0 -n kube-system \
   --set api.existingSecret=ankra-cloud-csi-api
 ```
 
@@ -47,7 +47,7 @@ metadata:
   name: data
 spec:
   accessModes: ["ReadWriteOnce"]
-  storageClassName: ankra-standard
+  storageClassName: ankra-default
   resources:
     requests:
       storage: 10Gi
@@ -61,8 +61,10 @@ spec:
 - A node DaemonSet: the driver, node-driver-registrar and a liveness probe. It uses the host network, so the metadata
   service sees the server's own address.
 - RBAC for both.
-- The StorageClasses `ankra-standard` (default), `ankra-maxiops`, `ankra-hdd` and `ankra-local-nvme`. All bind on
-  first consumer.
+- The StorageClasses `ankra-default` (default), `ankra-standard`, `ankra-maxiops`, `ankra-hdd` and `ankra-local-nvme`.
+  All bind on first consumer. `ankra-default` names no tier: each volume gets its zone's default storage tier
+  (`default_storage_tier` of `GET /v1/zones/{zone}/capabilities`), which is `local-nvme` in a zone without Ankra
+  Storage.
 - The `ankra-snapshots` VolumeSnapshotClass, when the cluster serves `snapshot.storage.k8s.io/v1`. The chart does not
   install the snapshot CRDs or the snapshot-controller.
 
@@ -91,7 +93,7 @@ Only single-node writer (ReadWriteOnce) is supported, in `Filesystem` and `Block
 | `node.kubeletDir` | `/var/lib/kubelet` | The kubelet's root directory. |
 | `node.maxVolumesPerNode` | `15` | Volumes one server can attach: 16 storage devices less its boot storage. |
 | `node.resources`, `.nodeSelector`, `.tolerations`, `.priorityClassName` | see `values.yaml` | Scheduling of the node plugin. |
-| `storageClasses` | four tiers | `name`, `tier` and `default` per StorageClass. |
+| `storageClasses` | the zone default and four tiers | `name`, `tier` and `default` per StorageClass; an empty `tier` is the zone's default tier. |
 | `storageClassDefaults.reclaimPolicy` | `Delete` | |
 | `storageClassDefaults.allowVolumeExpansion` | `true` | |
 | `storageClassDefaults.fsType` | `ext4` | `ext4` or `xfs`. |
@@ -115,7 +117,7 @@ The binary reads these environment variables, which the chart sets:
 | CSI | Ankra Cloud |
 | --- | --- |
 | Volume id | Storage id. The CSI volume name (`pvc-…`) is the storage title, the idempotency key: `CreateVolume` lists storages and reuses the one with that title. Storages have no labels yet; `csi.ankra.cloud/volume-name` is sent once they do. |
-| `CreateVolume` | `create_storage`: size rounded up to whole GiB (at least 1, at most 4096), `tier` from the StorageClass (default `standard`), zone from `topology.ankra.cloud/zone`. A snapshot source sends `source_snapshot_id`, a volume source `source_storage_id`. A storage left in `error` is deleted and created again. |
+| `CreateVolume` | `create_storage`: size rounded up to whole GiB (at least 1, at most 4096), `tier` from the StorageClass (left out when the class names none, so the API uses the zone's `default_storage_tier`), zone from `topology.ankra.cloud/zone`. A new `local-nvme` (or zone-default) volume sends `placement.server_id` = the scheduled node's server, so the storage lands on the compute node that runs it. A snapshot source sends `source_snapshot_id`, a volume source `source_storage_id`. A storage left in `error` is deleted and created again. |
 | `DeleteVolume` | `delete_storage`; a missing storage is success, an attached one is `FAILED_PRECONDITION`. |
 | `ControllerPublishVolume` | `attach_storage` to the node's server (hot-plug), waits for the operation. Returns the device serial in the publish context. |
 | `ControllerUnpublishVolume` | `detach_storage` (hot-unplug); a missing or elsewhere-attached storage is success. |
@@ -137,14 +139,15 @@ API errors become gRPC codes: 400 `INVALID_ARGUMENT`, 401 `UNAUTHENTICATED`, 403
 
 Every StorageClass binds on first consumer. The external-provisioner then passes the scheduled node's topology first
 in `preferred`, so the storage is created in that node's zone. A `local-nvme` (Ankra Local) volume lives on one
-compute node's own disks, so the driver also reports `topology.ankra.cloud/node` = the server id of the scheduled
-node; Kubernetes then only ever schedules the volume's pods onto that node. A `local-nvme` request without a node in
+compute node's own disks, so the driver creates it with `placement.server_id` = the server id of the scheduled node,
+which puts the storage on the compute node that runs that server, and reports `topology.ankra.cloud/node` = that
+server id; Kubernetes then only ever schedules the volume's pods onto that node. A clone stays on its source's node. A `local-nvme` request without a node in
 its topology (an `Immediate` StorageClass) is refused with `INVALID_ARGUMENT`.
 
 ### Operations the API is still gaining
 
-Snapshots (`create_snapshot`, `list_storage_snapshots`, `get_snapshot`, `delete_snapshot`) and `source_snapshot_id` on
-`create_storage` are called in `internal/cloud/pending.go`. Each call names its operationId: when the regenerated
+Snapshots (`create_snapshot`, `list_storage_snapshots`, `get_snapshot`, `delete_snapshot`) are called in
+`internal/cloud/pending.go`. Each call names its operationId: when the regenerated
 client (`make sync-client`) knows the operation, it goes through `ankraapi.Client.Call` with the specification's method and
 path, otherwise it is a plain HTTP request to the route the API documents. Everything else uses the typed generated client.
 The device serial is derived from the storage id until the generated `Storage` carries `device_serial`.

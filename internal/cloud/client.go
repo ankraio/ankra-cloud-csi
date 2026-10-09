@@ -109,13 +109,13 @@ func (client *Client) GetVolume(ctx context.Context, volumeID string) (Volume, e
 	return volumeFromStorage(envelope.Storage), nil
 }
 
-// CreateVolume creates a storage. A request with a source snapshot goes through the pending create_storage shape
-// (`source_snapshot_id`), which the generated request type does not carry yet.
+// CreateVolume creates a storage. An empty tier lets the API use the zone's default storage tier.
 func (client *Client) CreateVolume(ctx context.Context, request CreateVolumeRequest) (Volume, Operation, error) {
-	if request.SourceSnapshotID != "" {
-		return client.pending.createVolumeFromSnapshot(ctx, request)
+	body := ankraapi.CreateStorageRequest{Zone: request.Zone, Title: request.Title}
+	if request.Tier != "" {
+		tier := request.Tier
+		body.Tier = &tier
 	}
-	body := ankraapi.CreateStorageRequest{Zone: request.Zone, Title: request.Title, Tier: request.Tier}
 	if request.SizeGibibytes > 0 {
 		size := request.SizeGibibytes
 		body.SizeGibibytes = &size
@@ -123,6 +123,14 @@ func (client *Client) CreateVolume(ctx context.Context, request CreateVolumeRequ
 	if request.SourceStorageID != "" {
 		source := request.SourceStorageID
 		body.SourceStorageID = &source
+	}
+	if request.SourceSnapshotID != "" {
+		source := request.SourceSnapshotID
+		body.SourceSnapshotID = &source
+	}
+	if request.PlacementServerID != "" {
+		server := request.PlacementServerID
+		body.Placement = &ankraapi.StoragePlacement{ServerID: &server}
 	}
 	created, createError := client.generated.CreateStorage(ctx, body)
 	if createError != nil {
