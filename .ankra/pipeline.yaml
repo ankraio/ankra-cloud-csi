@@ -29,7 +29,7 @@ concurrency:
   cancel_in_progress: true
 workspace:
   size: "10Gi"
-  access: "rwo"
+  access: "rwx"
 defaults:
   image: "golang:1.26@sha256:52d57e3542f28ad72e9a1084e209366d8ca6af04997636134c138d16702a70a6"
   timeout: "30m"
