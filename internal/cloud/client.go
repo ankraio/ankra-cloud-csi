@@ -24,6 +24,10 @@ type Configuration struct {
 	// UserAgent identifies the driver in the API's logs.
 	UserAgent string
 	Timeout   time.Duration
+	// PingInterval is how long an HTTP/2 connection may go without a frame from the API before it is pinged (15s when
+	// zero). PingTimeout is how long that ping may go unanswered before the connection is closed (10s when zero).
+	PingInterval time.Duration
+	PingTimeout  time.Duration
 }
 
 // Client implements API against the Ankra Cloud public API.
@@ -46,7 +50,18 @@ func NewClient(configuration Configuration) (*Client, error) {
 	if timeout <= 0 {
 		timeout = 60 * time.Second
 	}
+	pingInterval := configuration.PingInterval
+	if pingInterval <= 0 {
+		pingInterval = 15 * time.Second
+	}
+	pingTimeout := configuration.PingTimeout
+	if pingTimeout <= 0 {
+		pingTimeout = 10 * time.Second
+	}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
+	// Every call shares one HTTP/2 connection. Without a health check, net/http keeps sending calls onto a connection
+	// that stopped answering until the kernel gives up on it, minutes later, and each of them waits out the timeout.
+	transport.HTTP2 = &http.HTTP2Config{SendPingTimeout: pingInterval, PingTimeout: pingTimeout}
 	if configuration.CABundlePath != "" {
 		bundle, readError := os.ReadFile(configuration.CABundlePath)
 		if readError != nil {
