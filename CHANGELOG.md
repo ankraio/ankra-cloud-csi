@@ -5,6 +5,15 @@ All notable changes to this project are documented here. The format follows
 
 ## Unreleased
 
+## v0.2.2
+
+### Fixed
+
+- Release builds now use the digest-pinned Go 1.26.10 toolchain, including the upstream crypto/x509
+  certificate verification fix in GO-2026-6809. Both Go modules require that patched minimum version.
+  This release retains the HTTP/2 connection health checks from 0.2.1 and changes no storage classes,
+  credentials or volume configuration (ankra-t9c7w.36.16).
+
 ## v0.2.1
 
 ### Fixed

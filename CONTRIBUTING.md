@@ -13,7 +13,7 @@ Security problems are not reported in issues: see [SECURITY.md](SECURITY.md).
 ## Making a change
 
 1. Fork the repository and branch from `main`.
-2. Make the change with a test. Go identifiers use full words (`requestError`, not `err`), except the idiomatic
+2. Use Go 1.26.10 or newer, then make the change with a test. Go identifiers use full words (`requestError`, not `err`), except the idiomatic
    `ctx`, method receivers and `ok`.
 3. Run the gates the pipeline runs:
 

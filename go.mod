@@ -1,6 +1,6 @@
 module github.com/ankraio/ankra-cloud-csi
 
-go 1.26.0
+go 1.26.10
 
 require (
 	github.com/container-storage-interface/spec v1.13.0
