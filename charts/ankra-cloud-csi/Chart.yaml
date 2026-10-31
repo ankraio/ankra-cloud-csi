@@ -2,8 +2,8 @@ apiVersion: v2
 name: ankra-cloud-csi
 description: CSI driver csi.ankra.cloud for Ankra Cloud block storage (dynamic volumes per tier, snapshots, clones, online expansion).
 type: application
-version: 0.2.1
-appVersion: "v0.2.1"
+version: 0.2.2
+appVersion: "v0.2.2"
 kubeVersion: ">=1.27.0-0"
 icon: https://ankra.io/images/apple-touch-icon.png
 home: https://github.com/ankraio/ankra-cloud-csi
@@ -43,7 +43,7 @@ annotations:
     - url: https://artifacthub.io/packages/helm/ankra-charts/ankra-cloud-ccm
   artifacthub.io/images: |
     - name: ankra-cloud-csi
-      image: share.ankra.cloud/library/ankra-cloud-csi:v0.2.1
+      image: share.ankra.cloud/library/ankra-cloud-csi:v0.2.2
       platforms:
         - linux/amd64
         - linux/arm64
@@ -61,4 +61,4 @@ annotations:
       image: registry.k8s.io/sig-storage/livenessprobe:v2.15.0
   artifacthub.io/changes: |
     - kind: fixed
-      description: "The API client health-checks its HTTP/2 connection and replaces one that stops answering within about 25 seconds. Before, every call kept going onto the dead connection and timed out for minutes, so volumes stayed Pending."
+      description: "Build with Go 1.26.10 and golang.org/x/net 0.62.0 to include fixes for GO-2026-6809, GO-2026-6860 and GO-2026-6866. Retains the HTTP/2 connection health checks from 0.2.1."

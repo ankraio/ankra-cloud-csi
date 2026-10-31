@@ -31,7 +31,7 @@ workspace:
   size: "10Gi"
   access: "rwo"
 defaults:
-  image: "golang:1.26@sha256:52d57e3542f28ad72e9a1084e209366d8ca6af04997636134c138d16702a70a6"
+  image: "golang:1.26.10@sha256:670bb5aa5349ae03b8516764718486f4f16399134bdc9acd0c46a23f043ab05c"
   timeout: "30m"
   network: "egress-https"
   # Steps run unprivileged with a read-only root file system, so every cache and scratch directory is in the
