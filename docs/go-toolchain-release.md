@@ -10,6 +10,12 @@ On 2026-10-31, release pipeline 28 for `7e9434f` reported the published Go advis
 also reports `go1.26.9` in its build information. The image stage inherits the
 same pinned pipeline toolchain and uses `ko build`.
 
+The old published binary scan also reports the `golang.org/x/net` HTML advisories
+GO-2026-6860 and GO-2026-6866. Source analysis does not find calls to the affected
+HTML functions, so the binary finding alone does not establish an exploitable
+driver path. The release nevertheless updates to the compatible patched 0.62.0
+dependency and validates both the source and actual release binaries.
+
 The release change pins the official multi-platform Go 1.26.10 image by digest
 for every inherited pipeline stage. It retains the HTTP/2 connection health
 checks released in 0.2.1. A new chart and driver patch version is required:

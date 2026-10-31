@@ -11,6 +11,7 @@ All notable changes to this project are documented here. The format follows
 
 - Release builds now use the digest-pinned Go 1.26.10 toolchain, including the upstream crypto/x509
   certificate verification fix in GO-2026-6809. Both Go modules require that patched minimum version.
+  The driver also updates golang.org/x/net to 0.62.0, which fixes GO-2026-6860 and GO-2026-6866.
   This release retains the HTTP/2 connection health checks from 0.2.1 and changes no storage classes,
   credentials or volume configuration (ankra-t9c7w.36.16).
 
