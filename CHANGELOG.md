@@ -5,6 +5,15 @@ All notable changes to this project are documented here. The format follows
 
 ## Unreleased
 
+## v0.2.1
+
+### Fixed
+
+- The API client health-checks its HTTP/2 connection: a connection that stops answering is pinged after 15 seconds
+  without a frame and closed when the ping goes unanswered for 10 seconds, so the next call dials a fresh one. Before,
+  every call kept going onto the dead connection and waited out the 60-second timeout until the kernel reset it, minutes
+  later, and workspace volumes stayed `Pending` the whole time (ankra-t9c7w.36.24).
+
 ## v0.2.0
 
 ### Fixed
