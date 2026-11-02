@@ -5,6 +5,15 @@ All notable changes to this project are documented here. The format follows
 
 ## Unreleased
 
+## v0.2.3
+
+### Fixed
+
+- A local-nvme volume whose selected node sits on a host whose Ankra Local pool takes no new volumes now fails
+  `CreateVolume` with `ResourceExhausted` instead of `FailedPrecondition`. external-provisioner then drops the
+  PVC's selected node and the scheduler places the pod on a node whose host has room; before, the pod stayed
+  Pending on the full node indefinitely. Other conflicts keep `FailedPrecondition` (ankra-ndm2sq).
+
 ## v0.2.2
 
 ### Fixed

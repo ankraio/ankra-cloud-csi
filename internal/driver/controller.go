@@ -126,6 +126,11 @@ func (driver *Driver) CreateVolume(ctx context.Context, request *csi.CreateVolum
 		Labels:            map[string]string{VolumeNameLabel: name},
 	})
 	if createError != nil {
+		if cloud.IsStorageUnavailable(createError) {
+			// ResourceExhausted, not FailedPrecondition: external-provisioner then drops the PVC's selected node, so the
+			// scheduler places the pod on a node whose host has room instead of retrying the full one forever.
+			return nil, status.Errorf(codes.ResourceExhausted, "create volume %s: %v", name, createError)
+		}
 		return nil, apiStatus(createError, "create volume %s", name)
 	}
 	if waitError := driver.wait(ctx, operation); waitError != nil {

@@ -2,8 +2,8 @@ apiVersion: v2
 name: ankra-cloud-csi
 description: CSI driver csi.ankra.cloud for Ankra Cloud block storage (dynamic volumes per tier, snapshots, clones, online expansion).
 type: application
-version: 0.2.2
-appVersion: "v0.2.2"
+version: 0.2.3
+appVersion: "v0.2.3"
 kubeVersion: ">=1.27.0-0"
 icon: https://ankra.io/images/apple-touch-icon.png
 home: https://github.com/ankraio/ankra-cloud-csi
@@ -43,7 +43,7 @@ annotations:
     - url: https://artifacthub.io/packages/helm/ankra-charts/ankra-cloud-ccm
   artifacthub.io/images: |
     - name: ankra-cloud-csi
-      image: share.ankra.cloud/library/ankra-cloud-csi:v0.2.2
+      image: share.ankra.cloud/library/ankra-cloud-csi:v0.2.3
       platforms:
         - linux/amd64
         - linux/arm64
