@@ -573,3 +573,21 @@ func TestNewRefusesIncompleteOptions(t *testing.T) {
 		t.Fatal("unknown mode accepted")
 	}
 }
+
+func TestCreateVolumeOnANodeWithoutRoomAsksForAnotherNode(t *testing.T) {
+	api := cloudfake.New()
+	csiDriver := newTestDriver(t, api, newFakeHost())
+	api.FailWithDetail("CreateVolume", http.StatusConflict,
+		"the storage backend is not available in this zone: the node's Ankra Local pool takes no new volumes: 60 GiB more would pass 80 %")
+	request := createRequest("pvc-full-node", gibibyte, map[string]string{ParameterTier: TierLocalNVMe})
+	request.AccessibilityRequirements = &csi.TopologyRequirement{
+		Requisite: []*csi.Topology{{Segments: map[string]string{TopologyZoneKey: testZone, TopologyNodeKey: testServerID}}},
+		Preferred: []*csi.Topology{{Segments: map[string]string{TopologyZoneKey: testZone, TopologyNodeKey: testServerID}}},
+	}
+	_, createError := csiDriver.CreateVolume(context.Background(), request)
+	expectCode(t, createError, codes.ResourceExhausted)
+
+	api.FailWithDetail("CreateVolume", http.StatusConflict, "the storage is attached")
+	_, otherConflictError := csiDriver.CreateVolume(context.Background(), request)
+	expectCode(t, otherConflictError, codes.FailedPrecondition)
+}

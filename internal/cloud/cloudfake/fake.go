@@ -37,8 +37,10 @@ type API struct {
 	sequence         int
 	// Failures maps a method name ("CreateVolume", "AttachVolume", …) to the API status it answers with.
 	failures map[string]int
-	calls    map[string]int
-	now      func() time.Time
+	// failureDetails is the problem detail a failing method answers with; "injected failure" when none was given.
+	failureDetails map[string]string
+	calls          map[string]int
+	now            func() time.Time
 }
 
 var _ cloud.API = (*API)(nil)
@@ -46,7 +48,7 @@ var _ cloud.API = (*API)(nil)
 // New returns an empty fake.
 func New() *API {
 	return &API{volumes: map[string]*cloud.Volume{}, snapshots: map[string]*cloud.Snapshot{}, servers: map[string]cloud.Server{},
-		operations: map[string]cloud.Operation{}, failures: map[string]int{}, calls: map[string]int{},
+		operations: map[string]cloud.Operation{}, failures: map[string]int{}, failureDetails: map[string]string{}, calls: map[string]int{},
 		zoneDefaultTiers: map[string]string{}, serverNodes: map[string]string{}, localVolumeNodes: map[string]string{},
 		now: func() time.Time { return time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC) }}
 }
@@ -104,9 +106,18 @@ func (fake *API) FailWith(method string, statusCode int) {
 	defer fake.mutex.Unlock()
 	if statusCode == 0 {
 		delete(fake.failures, method)
+		delete(fake.failureDetails, method)
 		return
 	}
 	fake.failures[method] = statusCode
+}
+
+// FailWithDetail makes every later call of method answer with statusCode and the problem detail the API would send.
+func (fake *API) FailWithDetail(method string, statusCode int, detail string) {
+	fake.FailWith(method, statusCode)
+	fake.mutex.Lock()
+	defer fake.mutex.Unlock()
+	fake.failureDetails[method] = detail
 }
 
 // Calls is how often method was called.
@@ -137,7 +148,11 @@ func (fake *API) VolumeCount() int {
 func (fake *API) enter(method string) error {
 	fake.calls[method]++
 	if statusCode, isFailing := fake.failures[method]; isFailing {
-		return cloud.NewError(statusCode, "injected failure")
+		detail := fake.failureDetails[method]
+		if detail == "" {
+			detail = "injected failure"
+		}
+		return cloud.NewError(statusCode, detail)
 	}
 	return nil
 }

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/ankraio/ankra-cloud-csi/internal/ankraapi"
@@ -152,6 +153,18 @@ func StatusCode(callError error) int {
 // IsNotFound reports whether the API answered 404.
 func IsNotFound(callError error) bool {
 	return StatusCode(callError) == http.StatusNotFound
+}
+
+// storageBackendUnavailableDetail opens the API's detail when the zone's tier, or the Ankra Local pool of the node a
+// local storage must land on, takes no new storage (the API's ErrStorageBackendUnavailable, ErrLocalPoolFull among them).
+const storageBackendUnavailableDetail = "the storage backend is not available in this zone"
+
+// IsStorageUnavailable reports whether the API refused a new storage because its tier, or the node it must land on, has
+// no room for it: another node, or a later attempt once room was made, can take it.
+func IsStorageUnavailable(callError error) bool {
+	var apiError *ankraapi.Error
+	return errors.As(callError, &apiError) && apiError.StatusCode == http.StatusConflict &&
+		strings.Contains(apiError.Detail, storageBackendUnavailableDetail)
 }
 
 // NewError builds the error the API would return, for fakes and the thin HTTP calls.
