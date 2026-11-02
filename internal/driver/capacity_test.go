@@ -74,9 +74,10 @@ func TestANodesCapacityIsWhatCreateVolumeTakesThere(t *testing.T) {
 	response, capacityError = csiDriver.GetCapacity(ctx, capacityRequest(TierLocalNVMe, nodeSegment()))
 	expectCapacity(t, response, capacityError, 4*gibibyte, 4*gibibyte)
 
-	if _, createError := csiDriver.CreateVolume(ctx, localCreateRequest("pvc-too-large", 5)); createError == nil {
-		t.Fatal("a volume past the published room is refused by the API too")
-	}
+	// A claim the published capacity did not stop (it is a poll old) is refused by the API too, and goes back to the
+	// scheduler.
+	_, createError := csiDriver.CreateVolume(ctx, localCreateRequest("pvc-too-large", 5))
+	expectCode(t, createError, codes.ResourceExhausted)
 	created, createError := csiDriver.CreateVolume(ctx, localCreateRequest("pvc-last", 4))
 	if createError != nil {
 		t.Fatalf("the last 4 GiB fit: %v", createError)
