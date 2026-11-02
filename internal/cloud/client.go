@@ -230,6 +230,12 @@ func (client *Client) GetOperation(ctx context.Context, operationID string) (Ope
 	return operationFromAPI(envelope.Operation), nil
 }
 
+// GetStorageCapacity reads how much new storage of each tier the API takes next to a server
+// (get_server_storage_capacity).
+func (client *Client) GetStorageCapacity(ctx context.Context, serverID string) (StorageCapacity, error) {
+	return client.pending.getStorageCapacity(ctx, serverID)
+}
+
 func volumeFromStorage(storage ankraapi.Storage) Volume {
 	volume := Volume{ID: storage.ID, Zone: storage.Zone, Title: storage.Title, Tier: storage.Tier, State: storage.State,
 		SizeGibibytes: storage.SizeGibibytes, DeviceSerial: DeviceSerialFor(storage.ID), CreatedAt: storage.CreatedAt}

@@ -187,6 +187,40 @@ func TestPendingOperationsUseTheirRoutes(t *testing.T) {
 	}
 }
 
+func TestGetStorageCapacityReadsEveryTierNextToTheServer(t *testing.T) {
+	client, calls := newAPIServer(t, map[string]string{
+		"GET /v1/servers/srv-1/storage-capacity": `{"storage_capacity":{"server_id":"srv-1","zone":"se-sto1","default_tier":"local-nvme","tiers":[
+{"tier":"local-nvme","backend":"ankra-local","maximum_size_gibibytes":0,"available_gibibytes":0,
+ "refusal":"the storage backend is not available in this zone: the node's Ankra Local pool takes no new volumes: 1 GiB more would provision 1.50 times the pool's 1424 GiB (the limit is 1.50 times)"},
+{"tier":"standard","backend":"ceph","maximum_size_gibibytes":0,"available_gibibytes":null,"refusal":"storage tier standard is not offered in zone se-sto1"}]}}`,
+	})
+	ctx := context.Background()
+	capacity, capacityError := client.GetStorageCapacity(ctx, "srv-1")
+	if capacityError != nil {
+		t.Fatalf("GetStorageCapacity: %v", capacityError)
+	}
+	if capacity.ServerID != "srv-1" || capacity.Zone != "se-sto1" || capacity.DefaultTier != "local-nvme" || len(capacity.Tiers) != 2 {
+		t.Fatalf("capacity %+v", capacity)
+	}
+	local, isKnown := capacity.Tier("local-nvme")
+	if !isKnown || local.AvailableGibibytes == nil || *local.AvailableGibibytes != 0 || local.MaximumGibibytes != 0 || local.Refusal == "" {
+		t.Fatalf("local-nvme %+v", local)
+	}
+	standard, _ := capacity.Tier("standard")
+	if standard.AvailableGibibytes != nil || standard.Refusal == "" {
+		t.Fatalf("a tier the API does not limit per node has no available_gibibytes: %+v", standard)
+	}
+	if _, isKnown := capacity.Tier("maxiops"); isKnown {
+		t.Fatal("a tier the API did not list is unknown")
+	}
+	if (*calls)[0].method != http.MethodGet || (*calls)[0].authorization != "Bearer act_test" {
+		t.Fatalf("call %+v", (*calls)[0])
+	}
+	if _, missingError := client.GetStorageCapacity(ctx, "gone"); !IsNotFound(missingError) {
+		t.Fatalf("a server the API does not know answers 404: %v", missingError)
+	}
+}
+
 func TestWaitForOperation(t *testing.T) {
 	client, _ := newAPIServer(t, map[string]string{
 		"GET /v1/operations/op-1": `{"operation":` + operationJSON + `}`,

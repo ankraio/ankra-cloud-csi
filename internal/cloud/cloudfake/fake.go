@@ -34,7 +34,11 @@ type API struct {
 	// serverNodes is the compute node each server runs on; localVolumeNodes the node each local storage lives on.
 	serverNodes      map[string]string
 	localVolumeNodes map[string]string
-	sequence         int
+	// localRooms is the GiB the Ankra Local pool of a compute node still takes; a node without an entry reports no
+	// pool and is not gated, as the API does not gate one. tierRefusals refuses a tier in every zone.
+	localRooms   map[string]int64
+	tierRefusals map[string]string
+	sequence     int
 	// Failures maps a method name ("CreateVolume", "AttachVolume", …) to the API status it answers with.
 	failures map[string]int
 	calls    map[string]int
@@ -48,6 +52,7 @@ func New() *API {
 	return &API{volumes: map[string]*cloud.Volume{}, snapshots: map[string]*cloud.Snapshot{}, servers: map[string]cloud.Server{},
 		operations: map[string]cloud.Operation{}, failures: map[string]int{}, calls: map[string]int{},
 		zoneDefaultTiers: map[string]string{}, serverNodes: map[string]string{}, localVolumeNodes: map[string]string{},
+		localRooms: map[string]int64{}, tierRefusals: map[string]string{},
 		now: func() time.Time { return time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC) }}
 }
 
@@ -70,6 +75,34 @@ func (fake *API) PlaceServer(serverID string, node string) {
 	fake.mutex.Lock()
 	defer fake.mutex.Unlock()
 	fake.serverNodes[serverID] = node
+}
+
+// SetLocalRoom makes the Ankra Local pool of a compute node take gibibytes more, as the API's thin-pool rule would:
+// a larger local storage there is refused with the API's 409, and creating and deleting local storages there moves
+// the room.
+func (fake *API) SetLocalRoom(node string, gibibytes int64) {
+	fake.mutex.Lock()
+	defer fake.mutex.Unlock()
+	fake.localRooms[node] = gibibytes
+}
+
+// LocalRoom is the GiB the Ankra Local pool of a compute node still takes; false when it is not gated.
+func (fake *API) LocalRoom(node string) (int64, bool) {
+	fake.mutex.Lock()
+	defer fake.mutex.Unlock()
+	room, isGated := fake.localRooms[node]
+	return room, isGated
+}
+
+// RefuseTier makes the API take no new storage of tier anywhere, with refusal as the reason; "" takes it again.
+func (fake *API) RefuseTier(tier string, refusal string) {
+	fake.mutex.Lock()
+	defer fake.mutex.Unlock()
+	if refusal == "" {
+		delete(fake.tierRefusals, tier)
+		return
+	}
+	fake.tierRefusals[tier] = refusal
 }
 
 // LocalVolumeNode is the compute node a local storage lives on.
@@ -221,9 +254,23 @@ func (fake *API) CreateVolume(_ context.Context, request cloud.CreateVolumeReque
 	if size <= 0 {
 		return cloud.Volume{}, cloud.Operation{}, cloud.NewError(http.StatusBadRequest, "size_gibibytes is required")
 	}
+	if refusal, isRefused := fake.tierRefusals[tier]; isRefused {
+		return cloud.Volume{}, cloud.Operation{}, cloud.NewError(http.StatusConflict, storageUnavailable+": "+refusal)
+	}
+	var node string
+	if tier == LocalStorageTier {
+		node = fake.localNode(request)
+		if room, isGated := fake.localRooms[node]; isGated && size > room {
+			return cloud.Volume{}, cloud.Operation{}, cloud.NewError(http.StatusConflict,
+				fmt.Sprintf("%s: the node's Ankra Local pool takes no new volumes: %d GiB more would pass its room of %d GiB", storageUnavailable, size, room))
+		}
+	}
 	identifier := fake.nextIdentifier("5a")
 	if tier == LocalStorageTier {
-		fake.localVolumeNodes[identifier] = fake.localNode(request)
+		fake.localVolumeNodes[identifier] = node
+		if room, isGated := fake.localRooms[node]; isGated {
+			fake.localRooms[node] = room - size
+		}
 	}
 	volume := &cloud.Volume{ID: identifier, Zone: request.Zone, Title: request.Title, Tier: tier,
 		State: cloud.StorageStateOnline, SizeGibibytes: size, DeviceSerial: cloud.DeviceSerialFor(identifier), CreatedAt: fake.now()}
@@ -256,6 +303,11 @@ func (fake *API) DeleteVolume(_ context.Context, volumeID string) (cloud.Operati
 	}
 	if volume.ServerID != "" {
 		return cloud.Operation{}, cloud.NewError(http.StatusConflict, "the storage is attached")
+	}
+	if node, isLocal := fake.localVolumeNodes[volumeID]; isLocal {
+		if room, isGated := fake.localRooms[node]; isGated {
+			fake.localRooms[node] = room + volume.SizeGibibytes
+		}
 	}
 	delete(fake.volumes, volumeID)
 	delete(fake.localVolumeNodes, volumeID)
@@ -413,6 +465,51 @@ func (fake *API) GetServer(_ context.Context, serverID string) (cloud.Server, er
 		return cloud.Server{}, notFound("server", serverID)
 	}
 	return server, nil
+}
+
+// storageUnavailable opens the API's detail for a tier or a node that takes no new storage
+// (ErrStorageBackendUnavailable).
+const storageUnavailable = "the storage backend is not available in this zone"
+
+// maximumStorageGibibytes mirrors the API's domain.MaximumStorageGibibytes.
+const maximumStorageGibibytes = 4096
+
+// fakeTiers are the tiers the fake API knows.
+var fakeTiers = []string{DefaultStorageTier, "hdd", LocalStorageTier}
+
+// GetStorageCapacity answers how much new storage of each tier the fake takes next to a server, by the rules its
+// CreateVolume applies.
+func (fake *API) GetStorageCapacity(_ context.Context, serverID string) (cloud.StorageCapacity, error) {
+	fake.mutex.Lock()
+	defer fake.mutex.Unlock()
+	if failure := fake.enter("GetStorageCapacity"); failure != nil {
+		return cloud.StorageCapacity{}, failure
+	}
+	server, isPresent := fake.servers[serverID]
+	if !isPresent {
+		return cloud.StorageCapacity{}, notFound("server", serverID)
+	}
+	defaultTier := fake.zoneDefaultTiers[server.Zone]
+	if defaultTier == "" {
+		defaultTier = DefaultStorageTier
+	}
+	capacity := cloud.StorageCapacity{ServerID: serverID, Zone: server.Zone, DefaultTier: defaultTier}
+	for _, tier := range fakeTiers {
+		tierCapacity := cloud.TierCapacity{Tier: tier, MaximumGibibytes: maximumStorageGibibytes}
+		if refusal, isRefused := fake.tierRefusals[tier]; isRefused {
+			tierCapacity = cloud.TierCapacity{Tier: tier, Refusal: storageUnavailable + ": " + refusal}
+		} else if node, isPlaced := fake.serverNodes[serverID]; tier == LocalStorageTier && isPlaced {
+			if room, isGated := fake.localRooms[node]; isGated {
+				available := max(room, 0)
+				tierCapacity = cloud.TierCapacity{Tier: tier, MaximumGibibytes: min(available, maximumStorageGibibytes), AvailableGibibytes: &available}
+				if available == 0 {
+					tierCapacity.Refusal = storageUnavailable + ": the node's Ankra Local pool takes no new volumes"
+				}
+			}
+		}
+		capacity.Tiers = append(capacity.Tiers, tierCapacity)
+	}
+	return capacity, nil
 }
 
 // GetOperation reads an operation.

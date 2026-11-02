@@ -39,6 +39,8 @@ func run() error {
 	maximumVolumes := flag.Int64("max-volumes-per-node", driver.DefaultMaximumVolumesPerNode, "volumes one node can attach")
 	operationTimeout := flag.Duration("operation-timeout", 5*time.Minute, "how long one call waits for an API operation")
 	pollInterval := flag.Duration("operation-poll-interval", 2*time.Second, "how often a running API operation is polled")
+	capacityCacheTTL := flag.Duration("capacity-cache-ttl", driver.DefaultCapacityCacheTTL,
+		"how long one read of a node's storage capacity answers GetCapacity (negative: read the API every time)")
 	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
 	if *showVersion {
@@ -87,7 +89,7 @@ func run() error {
 	options := driver.Options{
 		Mode: selectedMode, Version: version, API: api, DefaultZone: zone, ResolveNodeIdentity: resolveIdentity,
 		MaximumVolumesPerNode: *maximumVolumes, OperationTimeout: *operationTimeout, OperationPollInterval: *pollInterval,
-		Logger: logger,
+		CapacityCacheTTL: *capacityCacheTTL, Logger: logger,
 	}
 	if selectedMode == driver.ModeNode || selectedMode == driver.ModeAll {
 		options.Host = driver.NewHostOS()

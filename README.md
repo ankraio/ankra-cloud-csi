@@ -26,7 +26,7 @@ helm install ankra-cloud-csi ankra/ankra-cloud-csi -n kube-system --set api.exis
 The chart is also published as an OCI artifact:
 
 ```bash
-helm install ankra-cloud-csi oci://share.ankra.cloud/charts/ankra-cloud-csi --version 0.2.2 -n kube-system \
+helm install ankra-cloud-csi oci://share.ankra.cloud/charts/ankra-cloud-csi --version 0.3.0 -n kube-system \
   --set api.existingSecret=ankra-cloud-csi-api
 ```
 
@@ -60,7 +60,7 @@ spec:
   and a liveness probe.
 - A node DaemonSet: the driver, node-driver-registrar and a liveness probe. It uses the host network, so the metadata
   service sees the server's own address.
-- RBAC for both.
+- RBAC for both, and a namespaced Role for the `CSIStorageCapacity` objects while `capacity.enabled`.
 - The StorageClasses `ankra-default` (default), `ankra-standard`, `ankra-maxiops`, `ankra-hdd` and `ankra-local-nvme`.
   All bind on first consumer. `ankra-default` names no tier: each volume gets its zone's default storage tier
   (`default_storage_tier` of `GET /v1/zones/{zone}/capabilities`), which is `local-nvme` in a zone without Ankra
@@ -69,6 +69,28 @@ spec:
   install the snapshot CRDs or the snapshot-controller.
 
 Only single-node writer (ReadWriteOnce) is supported, in `Filesystem` and `Block` volume mode.
+
+## Storage capacity
+
+With `capacity.enabled` (the default) the controller's external-provisioner publishes a `CSIStorageCapacity` in the
+release namespace for every node and StorageClass, and the scheduler binds a `WaitForFirstConsumer` claim only to a node
+whose capacity fits it. For `local-nvme` (and a class without a tier where the zone's default is `local-nvme`) the
+capacity is what the Ankra Local pool of the node's compute node still takes: the API computes it with the same rule
+that refuses a volume with `409 the node's Ankra Local pool takes no new volumes` (the pool's used thresholds and its
+overcommit ratio, 1.5 times by default), so a node with a full pool is filtered out instead of chosen. Other tiers are
+not limited per node and report the largest volume the API takes.
+
+What it does not cover:
+
+- The pool belongs to the compute node (the host), and several servers can run on one host, of this cluster or of
+  others. Each of their Kubernetes nodes reports the whole room of the shared pool, so two claims scheduled at once onto
+  two nodes on one host can both fit the published room while only one fits the pool. The API refuses the second
+  volume with 409, and external-provisioner retries the claim.
+- The capacity is as old as the last poll (`capacity.pollInterval`) plus the driver's cache (`capacity.cacheTTL`), and
+  the scheduler does not count claims it has bound but not yet provisioned. A burst of claims onto one node can still
+  overrun its published room.
+- A node whose capacity was never published (a new node while the API cannot be reached) takes no new claims of these
+  classes until it is.
 
 ## Values
 
@@ -90,6 +112,9 @@ Only single-node writer (ReadWriteOnce) is supported, in `Filesystem` and `Block
 | `controller.operationTimeout` | `5m` | How long one CSI call waits for an API operation. |
 | `controller.sidecarTimeout` | `6m` | The sidecars' per-call timeout; above `operationTimeout` so the driver answers first. |
 | `controller.resources`, `.nodeSelector`, `.tolerations`, `.affinity`, `.priorityClassName` | see `values.yaml` | Scheduling of the controller. |
+| `capacity.enabled` | `true` | Storage capacity tracking: the CSIDriver's `storageCapacity` and external-provisioner's `--enable-capacity`. |
+| `capacity.pollInterval` | `30s` | How often external-provisioner asks the driver for every node's capacity again. |
+| `capacity.cacheTTL` | `10s` | How long one API read of a node's capacity answers its StorageClasses; keep it below `pollInterval`. |
 | `node.kubeletDir` | `/var/lib/kubelet` | The kubelet's root directory. |
 | `node.maxVolumesPerNode` | `15` | Volumes one server can attach: 16 storage devices less its boot storage. |
 | `node.resources`, `.nodeSelector`, `.tolerations`, `.priorityClassName` | see `values.yaml` | Scheduling of the node plugin. |
@@ -118,6 +143,7 @@ The binary reads these environment variables, which the chart sets:
 | --- | --- |
 | Volume id | Storage id. The CSI volume name (`pvc-…`) is the storage title, the idempotency key: `CreateVolume` lists storages and reuses the one with that title. Storages have no labels yet; `csi.ankra.cloud/volume-name` is sent once they do. |
 | `CreateVolume` | `create_storage`: size rounded up to whole GiB (at least 1, at most 4096), `tier` from the StorageClass (left out when the class names none, so the API uses the zone's `default_storage_tier`), zone from `topology.ankra.cloud/zone`. A new `local-nvme` (or zone-default) volume sends `placement.server_id` = the scheduled node's server, so the storage lands on the compute node that runs it. A snapshot source sends `source_snapshot_id`, a volume source `source_storage_id`. A storage left in `error` is deleted and created again. |
+| `GetCapacity` | `get_server_storage_capacity` (`GET /v1/servers/{id}/storage-capacity`) for the server in the node's `topology.ankra.cloud/node` segment. A tier the API limits per node (`local-nvme`: the room left in the Ankra Local pool of the server's compute node, by the rule `create_storage` refuses with 409) reports that room as the available capacity and the largest volume `create_storage` takes there as the maximum volume size. Other tiers, a tier the zone refuses everywhere and a server the API does not know report 4096 GiB. A class without a tier reads the zone's default tier. One read answers a node's classes for `capacity.cacheTTL`. |
 | `DeleteVolume` | `delete_storage`; a missing storage is success, an attached one is `FAILED_PRECONDITION`. |
 | `ControllerPublishVolume` | `attach_storage` to the node's server (hot-plug), waits for the operation. Returns the device serial in the publish context. |
 | `ControllerUnpublishVolume` | `detach_storage` (hot-unplug); a missing or elsewhere-attached storage is success. |
