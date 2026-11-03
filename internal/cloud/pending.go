@@ -14,7 +14,7 @@ import (
 	"github.com/ankraio/ankra-cloud-csi/internal/ankraapi"
 )
 
-// The operations the API is gaining alongside this driver: snapshots. Each call
+// The operations the API is gaining alongside this driver: snapshots and a server's storage capacity. Each call
 // names its operationId. Once `make sync-client` has regenerated the client from a specification that has the
 // operation, the call goes through ankraapi.Client.Call with the specification's method and path; until then it is a
 // plain HTTP request with the method and path below. Swapping to the typed methods later only touches this file.
@@ -31,6 +31,7 @@ var (
 	routeListStorageSnapshots = pendingRoute{"list_storage_snapshots", http.MethodGet, "/v1/storages/{id}/snapshots", []string{"id"}}
 	routeGetSnapshot          = pendingRoute{"get_snapshot", http.MethodGet, "/v1/snapshots/{id}", []string{"id"}}
 	routeDeleteSnapshot       = pendingRoute{"delete_snapshot", http.MethodDelete, "/v1/snapshots/{id}", []string{"id"}}
+	routeGetStorageCapacity   = pendingRoute{"get_server_storage_capacity", http.MethodGet, "/v1/servers/{id}/storage-capacity", []string{"id"}}
 )
 
 type pendingTransport struct {
@@ -116,6 +117,38 @@ func (transport *pendingTransport) deleteSnapshot(ctx context.Context, snapshotI
 		return Operation{}, callError
 	}
 	return operationFromAPI(answer.Operation), nil
+}
+
+type tierCapacityDocument struct {
+	Tier                 string  `json:"tier"`
+	MaximumSizeGibibytes int64   `json:"maximum_size_gibibytes"`
+	AvailableGibibytes   *int64  `json:"available_gibibytes"`
+	Refusal              *string `json:"refusal"`
+}
+
+func (transport *pendingTransport) getStorageCapacity(ctx context.Context, serverID string) (StorageCapacity, error) {
+	var answer struct {
+		StorageCapacity struct {
+			ServerID    string                 `json:"server_id"`
+			Zone        string                 `json:"zone"`
+			DefaultTier string                 `json:"default_tier"`
+			Tiers       []tierCapacityDocument `json:"tiers"`
+		} `json:"storage_capacity"`
+	}
+	if callError := transport.call(ctx, routeGetStorageCapacity, map[string]string{"id": serverID}, nil, nil, &answer); callError != nil {
+		return StorageCapacity{}, callError
+	}
+	document := answer.StorageCapacity
+	capacity := StorageCapacity{ServerID: document.ServerID, Zone: document.Zone, DefaultTier: document.DefaultTier,
+		Tiers: make([]TierCapacity, 0, len(document.Tiers))}
+	for _, tier := range document.Tiers {
+		converted := TierCapacity{Tier: tier.Tier, MaximumGibibytes: tier.MaximumSizeGibibytes, AvailableGibibytes: tier.AvailableGibibytes}
+		if tier.Refusal != nil {
+			converted.Refusal = *tier.Refusal
+		}
+		capacity.Tiers = append(capacity.Tiers, converted)
+	}
+	return capacity, nil
 }
 
 // call runs one pending operation and decodes its JSON answer into result.

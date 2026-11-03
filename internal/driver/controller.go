@@ -22,6 +22,8 @@ var controllerCapabilities = []csi.ControllerServiceCapability_RPC_Type{
 	csi.ControllerServiceCapability_RPC_CREATE_DELETE_SNAPSHOT,
 	csi.ControllerServiceCapability_RPC_LIST_SNAPSHOTS,
 	csi.ControllerServiceCapability_RPC_CLONE_VOLUME,
+	// GetCapacity publishes each node's room, so the scheduler binds a claim only to a node that can take its volume.
+	csi.ControllerServiceCapability_RPC_GET_CAPACITY,
 }
 
 // ControllerGetCapabilities lists the controller RPCs the driver implements.
@@ -67,6 +69,8 @@ func (driver *Driver) CreateVolume(ctx context.Context, request *csi.CreateVolum
 		return nil, status.Errorf(codes.Aborted, "an operation on volume %s is in progress", name)
 	}
 	defer release()
+	// Whether it lands or the API refuses it for want of room, the pools' room is worth reading again.
+	defer driver.forgetCapacities()
 	ctx, cancel := driver.operationContext(ctx)
 	defer cancel()
 
@@ -290,6 +294,7 @@ func (driver *Driver) DeleteVolume(ctx context.Context, request *csi.DeleteVolum
 		return nil, status.Errorf(codes.Aborted, "an operation on volume %s is in progress", volumeID)
 	}
 	defer release()
+	defer driver.forgetCapacities()
 	ctx, cancel := driver.operationContext(ctx)
 	defer cancel()
 	volume, getError := driver.options.API.GetVolume(ctx, volumeID)
@@ -440,6 +445,7 @@ func (driver *Driver) ControllerExpandVolume(ctx context.Context, request *csi.C
 		return nil, status.Errorf(codes.Aborted, "an operation on volume %s is in progress", volumeID)
 	}
 	defer release()
+	defer driver.forgetCapacities()
 	ctx, cancel := driver.operationContext(ctx)
 	defer cancel()
 	volume, getError := driver.options.API.GetVolume(ctx, volumeID)

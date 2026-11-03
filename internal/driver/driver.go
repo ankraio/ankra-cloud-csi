@@ -89,7 +89,10 @@ type Options struct {
 	OperationTimeout time.Duration
 	// DeviceWaitTimeout bounds how long NodeStage waits for the hot-plugged disk to appear.
 	DeviceWaitTimeout time.Duration
-	Logger            *slog.Logger
+	// CapacityCacheTTL is how long one read of a server's storage capacity answers GetCapacity
+	// (DefaultCapacityCacheTTL when zero, no caching when negative).
+	CapacityCacheTTL time.Duration
+	Logger           *slog.Logger
 }
 
 // Driver serves the CSI services.
@@ -103,6 +106,8 @@ type Driver struct {
 	inFlight     sync.Map
 	identityOnce sync.Mutex
 	identity     *NodeIdentity
+	capacities   capacityCache
+	now          func() time.Time
 }
 
 // New validates the options and builds a Driver.
@@ -138,6 +143,9 @@ func New(options Options) (*Driver, error) {
 	if options.DeviceWaitTimeout <= 0 {
 		options.DeviceWaitTimeout = 60 * time.Second
 	}
+	if options.CapacityCacheTTL == 0 {
+		options.CapacityCacheTTL = DefaultCapacityCacheTTL
+	}
 	if options.Version == "" {
 		options.Version = "dev"
 	}
@@ -145,7 +153,8 @@ func New(options Options) (*Driver, error) {
 	if logger == nil {
 		logger = slog.New(slog.NewTextHandler(os.Stderr, nil))
 	}
-	return &Driver{options: options, logger: logger}, nil
+	return &Driver{options: options, logger: logger, now: time.Now,
+		capacities: capacityCache{entries: map[string]capacityEntry{}, refusals: map[string]string{}}}, nil
 }
 
 func (options Options) servesController() bool {

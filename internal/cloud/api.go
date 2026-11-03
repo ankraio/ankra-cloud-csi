@@ -111,6 +111,40 @@ type CreateVolumeRequest struct {
 	Labels map[string]string
 }
 
+// TierCapacity is how much new storage of one tier the API takes next to a server (get_server_storage_capacity).
+type TierCapacity struct {
+	Tier string
+	// MaximumGibibytes is the largest new storage of the tier, placed next to the server, that the API takes now; 0
+	// when it takes none.
+	MaximumGibibytes int64
+	// AvailableGibibytes is the room for all new storages of the tier next to the server together when the API limits
+	// it per node: what the Ankra Local pool of the server's compute node still takes. nil when the API does not limit
+	// the tier per node (Ceph tiers, a pool not reported yet, a tier the zone takes no new storage of anywhere).
+	AvailableGibibytes *int64
+	// Refusal is the error the API answers a new storage of the tier next to the server with now; empty while it takes
+	// one.
+	Refusal string
+}
+
+// StorageCapacity is the new storage each tier takes next to one server.
+type StorageCapacity struct {
+	ServerID string
+	Zone     string
+	// DefaultTier is the tier a storage created without one gets in the server's zone.
+	DefaultTier string
+	Tiers       []TierCapacity
+}
+
+// Tier returns the capacity of the named tier; false when the API does not know the tier.
+func (capacity StorageCapacity) Tier(name string) (TierCapacity, bool) {
+	for _, tier := range capacity.Tiers {
+		if tier.Tier == name {
+			return tier, true
+		}
+	}
+	return TierCapacity{}, false
+}
+
 // API is every call the driver makes. Errors from the API are *ankraapi.Error, so StatusCode tells them apart.
 type API interface {
 	ListVolumes(ctx context.Context) ([]Volume, error)
@@ -131,6 +165,10 @@ type API interface {
 
 	GetServer(ctx context.Context, serverID string) (Server, error)
 	GetOperation(ctx context.Context, operationID string) (Operation, error)
+
+	// GetStorageCapacity reads how much new storage of each tier the API takes next to the server: for local-nvme,
+	// the room left in the Ankra Local pool of the server's compute node, by the rule CreateVolume is refused with.
+	GetStorageCapacity(ctx context.Context, serverID string) (StorageCapacity, error)
 }
 
 // DeviceSerialFor is the virtio serial of a storage's disk: the first DeviceSerialLength characters of its id.

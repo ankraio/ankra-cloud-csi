@@ -37,9 +37,16 @@ defaults:
   # Steps run unprivileged with a read-only root file system, so every cache and scratch directory is in the
   # shared workspace. TMPDIR and XDG_CACHE_HOME are names Ankra reserves, so a run that declared one here is refused
   # before checkout; the image stages, where apko needs a user cache directory, export them in the script instead.
+  #
+  # Each Go stage keeps its own module cache in scratch (GOMODCACHE="${GOTMPDIR}/mod-<stage>", set in its script),
+  # not in the cached /workspace/.ci-cache/go. The cache restore unpacks an archive of Go's read-only (0555) module
+  # directories with a tar that creates each directory read-only and then cannot write the files into it, so a
+  # restore leaves empty module directories that go trusts ("open .../gomock/call.go: no such file or directory",
+  # run #43). The parallel stages also unpacked into the one shared tree, each over the others'. -modcacherw keeps the
+  # directories writable, so a module cache archived after this restores again (ankra-jibdwx).
   env:
     # The workspace root belongs to another user, so git refuses VCS stamping and go build fails; no binary reads it.
-    GOFLAGS: "-buildvcs=false"
+    GOFLAGS: "-buildvcs=false -modcacherw"
     GOTOOLCHAIN: "local"
     GOMAXPROCS: "2"
     GOPATH: "/workspace/.ci-cache/go"
@@ -66,6 +73,7 @@ stages:
       - "checkout"
     run: |-
       set -eu
+      export GOMODCACHE="${GOTMPDIR}/mod-test"
       mkdir -p "${GOTMPDIR}"
       test -z "$(gofmt -l cmd internal tools)"
       make vet
@@ -87,6 +95,7 @@ stages:
     needs:
       - "checkout"
     run: |-
+      export GOMODCACHE="${GOTMPDIR}/mod-sanity"
       mkdir -p "${GOTMPDIR}"
       make sanity
     cache:
@@ -104,6 +113,7 @@ stages:
     needs:
       - "checkout"
     run: |-
+      export GOMODCACHE="${GOTMPDIR}/mod-lint"
       mkdir -p "${GOTMPDIR}"
       make lint
     cache:
@@ -124,6 +134,7 @@ stages:
       - "checkout"
     allow_failure: true
     run: |-
+      export GOMODCACHE="${GOTMPDIR}/mod-vulnerabilities"
       mkdir -p "${GOTMPDIR}"
       go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
     cache:
@@ -158,6 +169,7 @@ stages:
         - "pull_request"
     run: |-
       set -eu
+      export GOMODCACHE="${GOTMPDIR}/mod-image"
       mkdir -p "${GOTMPDIR}"
       TMPDIR="${GOTMPDIR}"
       XDG_CACHE_HOME="${GOTMPDIR}/cache"
@@ -191,6 +203,7 @@ stages:
       - "share_login"
     run: |-
       set -eu
+      export GOMODCACHE="${GOTMPDIR}/mod-image"
       mkdir -p "${GOTMPDIR}"
       TMPDIR="${GOTMPDIR}"
       XDG_CACHE_HOME="${GOTMPDIR}/cache"

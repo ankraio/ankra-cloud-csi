@@ -8,9 +8,9 @@ metadata:
   labels:
     app.kubernetes.io/name: ankra-cloud-csi
     app.kubernetes.io/instance: ankra-cloud-csi
-    app.kubernetes.io/version: "v0.2.3"
+    app.kubernetes.io/version: "v0.3.0"
     app.kubernetes.io/managed-by: Helm
-    helm.sh/chart: ankra-cloud-csi-0.2.3
+    helm.sh/chart: ankra-cloud-csi-0.3.0
 ---
 # Source: ankra-cloud-csi/templates/rbac.yaml
 apiVersion: v1
@@ -21,9 +21,9 @@ metadata:
   labels:
     app.kubernetes.io/name: ankra-cloud-csi
     app.kubernetes.io/instance: ankra-cloud-csi
-    app.kubernetes.io/version: "v0.2.3"
+    app.kubernetes.io/version: "v0.3.0"
     app.kubernetes.io/managed-by: Helm
-    helm.sh/chart: ankra-cloud-csi-0.2.3
+    helm.sh/chart: ankra-cloud-csi-0.3.0
 ---
 # Source: ankra-cloud-csi/templates/storageclasses.yaml
 apiVersion: storage.k8s.io/v1
@@ -33,9 +33,9 @@ metadata:
   labels:
     app.kubernetes.io/name: ankra-cloud-csi
     app.kubernetes.io/instance: ankra-cloud-csi
-    app.kubernetes.io/version: "v0.2.3"
+    app.kubernetes.io/version: "v0.3.0"
     app.kubernetes.io/managed-by: Helm
-    helm.sh/chart: ankra-cloud-csi-0.2.3
+    helm.sh/chart: ankra-cloud-csi-0.3.0
   annotations:
     storageclass.kubernetes.io/is-default-class: "true"
 provisioner: csi.ankra.cloud
@@ -54,9 +54,9 @@ metadata:
   labels:
     app.kubernetes.io/name: ankra-cloud-csi
     app.kubernetes.io/instance: ankra-cloud-csi
-    app.kubernetes.io/version: "v0.2.3"
+    app.kubernetes.io/version: "v0.3.0"
     app.kubernetes.io/managed-by: Helm
-    helm.sh/chart: ankra-cloud-csi-0.2.3
+    helm.sh/chart: ankra-cloud-csi-0.3.0
 provisioner: csi.ankra.cloud
 parameters:
   tier: "standard"
@@ -74,9 +74,9 @@ metadata:
   labels:
     app.kubernetes.io/name: ankra-cloud-csi
     app.kubernetes.io/instance: ankra-cloud-csi
-    app.kubernetes.io/version: "v0.2.3"
+    app.kubernetes.io/version: "v0.3.0"
     app.kubernetes.io/managed-by: Helm
-    helm.sh/chart: ankra-cloud-csi-0.2.3
+    helm.sh/chart: ankra-cloud-csi-0.3.0
 provisioner: csi.ankra.cloud
 parameters:
   tier: "maxiops"
@@ -94,9 +94,9 @@ metadata:
   labels:
     app.kubernetes.io/name: ankra-cloud-csi
     app.kubernetes.io/instance: ankra-cloud-csi
-    app.kubernetes.io/version: "v0.2.3"
+    app.kubernetes.io/version: "v0.3.0"
     app.kubernetes.io/managed-by: Helm
-    helm.sh/chart: ankra-cloud-csi-0.2.3
+    helm.sh/chart: ankra-cloud-csi-0.3.0
 provisioner: csi.ankra.cloud
 parameters:
   tier: "hdd"
@@ -114,9 +114,9 @@ metadata:
   labels:
     app.kubernetes.io/name: ankra-cloud-csi
     app.kubernetes.io/instance: ankra-cloud-csi
-    app.kubernetes.io/version: "v0.2.3"
+    app.kubernetes.io/version: "v0.3.0"
     app.kubernetes.io/managed-by: Helm
-    helm.sh/chart: ankra-cloud-csi-0.2.3
+    helm.sh/chart: ankra-cloud-csi-0.3.0
 provisioner: csi.ankra.cloud
 parameters:
   tier: "local-nvme"
@@ -135,9 +135,9 @@ metadata:
   labels:
     app.kubernetes.io/name: ankra-cloud-csi
     app.kubernetes.io/instance: ankra-cloud-csi
-    app.kubernetes.io/version: "v0.2.3"
+    app.kubernetes.io/version: "v0.3.0"
     app.kubernetes.io/managed-by: Helm
-    helm.sh/chart: ankra-cloud-csi-0.2.3
+    helm.sh/chart: ankra-cloud-csi-0.3.0
 rules:
   - apiGroups: [""]
     resources: ["persistentvolumes"]
@@ -184,9 +184,9 @@ metadata:
   labels:
     app.kubernetes.io/name: ankra-cloud-csi
     app.kubernetes.io/instance: ankra-cloud-csi
-    app.kubernetes.io/version: "v0.2.3"
+    app.kubernetes.io/version: "v0.3.0"
     app.kubernetes.io/managed-by: Helm
-    helm.sh/chart: ankra-cloud-csi-0.2.3
+    helm.sh/chart: ankra-cloud-csi-0.3.0
 subjects:
   - kind: ServiceAccount
     name: ankra-cloud-csi-controller
@@ -206,13 +206,59 @@ metadata:
   labels:
     app.kubernetes.io/name: ankra-cloud-csi
     app.kubernetes.io/instance: ankra-cloud-csi
-    app.kubernetes.io/version: "v0.2.3"
+    app.kubernetes.io/version: "v0.3.0"
     app.kubernetes.io/managed-by: Helm
-    helm.sh/chart: ankra-cloud-csi-0.2.3
+    helm.sh/chart: ankra-cloud-csi-0.3.0
 rules:
   - apiGroups: ["coordination.k8s.io"]
     resources: ["leases"]
     verbs: ["get", "watch", "list", "delete", "update", "create"]
+---
+# Source: ankra-cloud-csi/templates/rbac.yaml
+# Storage capacity tracking (external-provisioner --enable-capacity): the CSIStorageCapacity objects it publishes in
+# this namespace, and the pod and ReplicaSet it reads to find the Deployment that owns them.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ankra-cloud-csi-controller-capacity
+  namespace: kube-system
+  labels:
+    app.kubernetes.io/name: ankra-cloud-csi
+    app.kubernetes.io/instance: ankra-cloud-csi
+    app.kubernetes.io/version: "v0.3.0"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: ankra-cloud-csi-0.3.0
+rules:
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["csistoragecapacities"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get"]
+  - apiGroups: ["apps"]
+    resources: ["replicasets"]
+    verbs: ["get"]
+---
+# Source: ankra-cloud-csi/templates/rbac.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ankra-cloud-csi-controller-capacity
+  namespace: kube-system
+  labels:
+    app.kubernetes.io/name: ankra-cloud-csi
+    app.kubernetes.io/instance: ankra-cloud-csi
+    app.kubernetes.io/version: "v0.3.0"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: ankra-cloud-csi-0.3.0
+subjects:
+  - kind: ServiceAccount
+    name: ankra-cloud-csi-controller
+    namespace: kube-system
+roleRef:
+  kind: Role
+  name: ankra-cloud-csi-controller-capacity
+  apiGroup: rbac.authorization.k8s.io
 ---
 # Source: ankra-cloud-csi/templates/rbac.yaml
 apiVersion: rbac.authorization.k8s.io/v1
@@ -223,9 +269,9 @@ metadata:
   labels:
     app.kubernetes.io/name: ankra-cloud-csi
     app.kubernetes.io/instance: ankra-cloud-csi
-    app.kubernetes.io/version: "v0.2.3"
+    app.kubernetes.io/version: "v0.3.0"
     app.kubernetes.io/managed-by: Helm
-    helm.sh/chart: ankra-cloud-csi-0.2.3
+    helm.sh/chart: ankra-cloud-csi-0.3.0
 subjects:
   - kind: ServiceAccount
     name: ankra-cloud-csi-controller
@@ -244,9 +290,9 @@ metadata:
   labels:
     app.kubernetes.io/name: ankra-cloud-csi
     app.kubernetes.io/instance: ankra-cloud-csi
-    app.kubernetes.io/version: "v0.2.3"
+    app.kubernetes.io/version: "v0.3.0"
     app.kubernetes.io/managed-by: Helm
-    helm.sh/chart: ankra-cloud-csi-0.2.3
+    helm.sh/chart: ankra-cloud-csi-0.3.0
     app.kubernetes.io/component: node
 spec:
   selector:
@@ -263,9 +309,9 @@ spec:
       labels:
         app.kubernetes.io/name: ankra-cloud-csi
         app.kubernetes.io/instance: ankra-cloud-csi
-        app.kubernetes.io/version: "v0.2.3"
+        app.kubernetes.io/version: "v0.3.0"
         app.kubernetes.io/managed-by: Helm
-        helm.sh/chart: ankra-cloud-csi-0.2.3
+        helm.sh/chart: ankra-cloud-csi-0.3.0
         app.kubernetes.io/component: node
     spec:
       serviceAccountName: ankra-cloud-csi-node
@@ -278,7 +324,7 @@ spec:
         - operator: Exists
       containers:
         - name: ankra-cloud-csi
-          image: share.ankra.cloud/library/ankra-cloud-csi:v0.2.3
+          image: share.ankra.cloud/library/ankra-cloud-csi:v0.3.0
           imagePullPolicy: IfNotPresent
           args:
             - --mode=node
@@ -389,9 +435,9 @@ metadata:
   labels:
     app.kubernetes.io/name: ankra-cloud-csi
     app.kubernetes.io/instance: ankra-cloud-csi
-    app.kubernetes.io/version: "v0.2.3"
+    app.kubernetes.io/version: "v0.3.0"
     app.kubernetes.io/managed-by: Helm
-    helm.sh/chart: ankra-cloud-csi-0.2.3
+    helm.sh/chart: ankra-cloud-csi-0.3.0
     app.kubernetes.io/component: controller
 spec:
   replicas: 1
@@ -405,9 +451,9 @@ spec:
       labels:
         app.kubernetes.io/name: ankra-cloud-csi
         app.kubernetes.io/instance: ankra-cloud-csi
-        app.kubernetes.io/version: "v0.2.3"
+        app.kubernetes.io/version: "v0.3.0"
         app.kubernetes.io/managed-by: Helm
-        helm.sh/chart: ankra-cloud-csi-0.2.3
+        helm.sh/chart: ankra-cloud-csi-0.3.0
         app.kubernetes.io/component: controller
     spec:
       serviceAccountName: ankra-cloud-csi-controller
@@ -424,12 +470,13 @@ spec:
           type: RuntimeDefault
       containers:
         - name: ankra-cloud-csi
-          image: share.ankra.cloud/library/ankra-cloud-csi:v0.2.3
+          image: share.ankra.cloud/library/ankra-cloud-csi:v0.3.0
           imagePullPolicy: IfNotPresent
           args:
             - --mode=controller
             - --endpoint=unix:///csi/csi.sock
             - --operation-timeout=5m
+            - --capacity-cache-ttl=10s
           env:
             - name: ANKRA_CLOUD_API_URL
               value: "https://cloud.ankra.app"
@@ -474,6 +521,20 @@ spec:
             - --leader-election-namespace=kube-system
             - --timeout=6m
             - --retry-interval-max=5m
+            # Publish each node's room as CSIStorageCapacity objects in this namespace, owned by the Deployment
+            # (pod -> ReplicaSet -> Deployment), so they outlive a rollout and go away with the release.
+            - --enable-capacity
+            - --capacity-ownerref-level=2
+            - --capacity-poll-interval=30s
+          env:
+            - name: NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
           volumeMounts:
             - name: socket-dir
               mountPath: /csi
@@ -554,12 +615,15 @@ metadata:
   labels:
     app.kubernetes.io/name: ankra-cloud-csi
     app.kubernetes.io/instance: ankra-cloud-csi
-    app.kubernetes.io/version: "v0.2.3"
+    app.kubernetes.io/version: "v0.3.0"
     app.kubernetes.io/managed-by: Helm
-    helm.sh/chart: ankra-cloud-csi-0.2.3
+    helm.sh/chart: ankra-cloud-csi-0.3.0
 spec:
   attachRequired: true
   podInfoOnMount: false
   fsGroupPolicy: File
+  # The scheduler binds a WaitForFirstConsumer claim only to a node whose CSIStorageCapacity fits it; the controller's
+  # external-provisioner publishes one per node and StorageClass from the driver's GetCapacity.
+  storageCapacity: true
   volumeLifecycleModes:
     - Persistent

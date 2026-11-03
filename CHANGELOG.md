@@ -5,6 +5,28 @@ All notable changes to this project are documented here. The format follows
 
 ## Unreleased
 
+## v0.3.0
+
+### Added
+
+- Storage capacity tracking. The controller implements `GetCapacity` and advertises `GET_CAPACITY`; the chart sets the
+  CSIDriver's `storageCapacity: true` and runs external-provisioner with `--enable-capacity`, so a `CSIStorageCapacity`
+  is published for every node and StorageClass, and the scheduler binds a `WaitForFirstConsumer` claim only to a node
+  whose capacity fits it. The capacity is the Ankra Cloud API's own answer (`GET /v1/servers/{id}/storage-capacity`):
+  for `local-nvme`, and for a class without a tier in a zone whose default is `local-nvme`, the room left in the Ankra
+  Local pool of the node's compute node under the pool's used thresholds and overcommit ratio, computed by the rule
+  that refuses `create_storage` with `409 the node's Ankra Local pool takes no new volumes`. Before, a claim could be
+  bound to a node whose pool was full; `CreateVolume` then failed until other volumes were deleted, which held CI
+  workspaces `Pending` for 15 to 19 minutes on ankra-ci-sto1 (ankra-q573dh.79.5).
+- Tiers the API does not limit per node (the Ankra Storage tiers, a pool whose agent reports nothing yet, a tier the
+  zone refuses everywhere) and a server the API does not know report the largest volume the API takes (4096 GiB),
+  which is what the scheduler assumed before: capacity only steers the choice of node, and a claim no node can take
+  still gets the API's reason from `CreateVolume`. Other API failures leave the last published capacity in place.
+- One read of a server's capacity answers its StorageClasses for `--capacity-cache-ttl` (10s), so a poll costs one
+  API call per node. Values `capacity.enabled` (default `true`), `capacity.pollInterval` (`30s`) and
+  `capacity.cacheTTL` (`10s`); the controller gets a namespaced Role for `csistoragecapacities` and for reading its
+  pod and ReplicaSet (the objects are owned by the controller Deployment).
+
 ## v0.2.3
 
 ### Fixed
