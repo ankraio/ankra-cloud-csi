@@ -1,0 +1,17 @@
+# The COSI driver's base image: CA certificates on Wolfi, with no shell and no package manager. The driver only talks
+# HTTPS to the Ankra Cloud API and to the zone's S3 endpoint. hack/image.sh builds it with apko for both architectures
+# and puts the driver binary on top with ko.
+contents:
+  keyring:
+    - https://packages.wolfi.dev/os/wolfi-signing.rsa.pub
+  repositories:
+    - https://packages.wolfi.dev/os
+  packages:
+    - wolfi-baselayout
+    - ca-certificates-bundle
+archs:
+  - x86_64
+  - aarch64
+annotations:
+  org.opencontainers.image.source: https://github.com/ankraio/ankra-cloud-csi
+  org.opencontainers.image.licenses: Apache-2.0

@@ -1,0 +1,202 @@
+---
+# Source: ankra-cloud-cosi/templates/rbac.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ankra-cloud-cosi
+  namespace: kube-system
+  labels:
+    app.kubernetes.io/name: ankra-cloud-cosi
+    app.kubernetes.io/instance: ankra-cloud-cosi
+    app.kubernetes.io/version: "v0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: ankra-cloud-cosi-0.1.0
+
+---
+# Source: ankra-cloud-cosi/templates/rbac.yaml
+# What the objectstorage provisioner sidecar reads and writes: Buckets and BucketAccesses with their status, the
+# BucketClaims it marks ready, the classes it reads parameters from, the credential Secrets it creates in the
+# BucketAccess's namespace, and events.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ankra-cloud-cosi
+  labels:
+    app.kubernetes.io/name: ankra-cloud-cosi
+    app.kubernetes.io/instance: ankra-cloud-cosi
+    app.kubernetes.io/version: "v0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: ankra-cloud-cosi-0.1.0
+rules:
+  - apiGroups: ["objectstorage.k8s.io"]
+    resources: ["buckets", "bucketaccesses", "bucketclaims"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+  - apiGroups: ["objectstorage.k8s.io"]
+    resources: ["buckets/status", "bucketaccesses/status", "bucketclaims/status"]
+    verbs: ["get", "update", "patch"]
+  - apiGroups: ["objectstorage.k8s.io"]
+    resources: ["bucketclasses", "bucketaccessclasses"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+
+---
+# Source: ankra-cloud-cosi/templates/rbac.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: ankra-cloud-cosi
+  labels:
+    app.kubernetes.io/name: ankra-cloud-cosi
+    app.kubernetes.io/instance: ankra-cloud-cosi
+    app.kubernetes.io/version: "v0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: ankra-cloud-cosi-0.1.0
+subjects:
+  - kind: ServiceAccount
+    name: ankra-cloud-cosi
+    namespace: kube-system
+roleRef:
+  kind: ClusterRole
+  name: ankra-cloud-cosi
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# Source: ankra-cloud-cosi/templates/rbac.yaml
+# The sidecar's leader election lease, in the release namespace (POD_NAMESPACE).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ankra-cloud-cosi-leader-election
+  namespace: kube-system
+  labels:
+    app.kubernetes.io/name: ankra-cloud-cosi
+    app.kubernetes.io/instance: ankra-cloud-cosi
+    app.kubernetes.io/version: "v0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: ankra-cloud-cosi-0.1.0
+rules:
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+---
+# Source: ankra-cloud-cosi/templates/rbac.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ankra-cloud-cosi-leader-election
+  namespace: kube-system
+  labels:
+    app.kubernetes.io/name: ankra-cloud-cosi
+    app.kubernetes.io/instance: ankra-cloud-cosi
+    app.kubernetes.io/version: "v0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: ankra-cloud-cosi-0.1.0
+subjects:
+  - kind: ServiceAccount
+    name: ankra-cloud-cosi
+    namespace: kube-system
+roleRef:
+  kind: Role
+  name: ankra-cloud-cosi-leader-election
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# Source: ankra-cloud-cosi/templates/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ankra-cloud-cosi
+  namespace: kube-system
+  labels:
+    app.kubernetes.io/name: ankra-cloud-cosi
+    app.kubernetes.io/instance: ankra-cloud-cosi
+    app.kubernetes.io/version: "v0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: ankra-cloud-cosi-0.1.0
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ankra-cloud-cosi
+      app.kubernetes.io/instance: ankra-cloud-cosi
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ankra-cloud-cosi
+        app.kubernetes.io/instance: ankra-cloud-cosi
+        app.kubernetes.io/version: "v0.1.0"
+        app.kubernetes.io/managed-by: Helm
+        helm.sh/chart: ankra-cloud-cosi-0.1.0
+    spec:
+      serviceAccountName: ankra-cloud-cosi
+      tolerations:
+        - effect: NoSchedule
+          key: node-role.kubernetes.io/control-plane
+          operator: Exists
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: ankra-cloud-cosi
+          image: share.ankra.cloud/library/ankra-cloud-cosi:v0.1.0
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: COSI_ENDPOINT
+              value: unix:///var/lib/cosi/cosi.sock
+            - name: ANKRA_CLOUD_API_URL
+              value: "https://cloud.ankra.app"
+            - name: ANKRA_CLOUD_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: ankra-cloud-csi-api
+                  key: token
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /var/lib/cosi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            limits:
+              memory: 128Mi
+            requests:
+              cpu: 10m
+              memory: 32Mi
+        - name: objectstorage-provisioner-sidecar
+          image: registry.k8s.io/sig-storage/objectstorage-sidecar:v0.2.2@sha256:c7166a73a303c43c8c1dca3e81aacf2fa85e98b46bcab0b64249cde19fa67979
+          args:
+            - --driver-addr=unix:///var/lib/cosi/cosi.sock
+            - --v=2
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /var/lib/cosi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            limits:
+              memory: 128Mi
+            requests:
+              cpu: 10m
+              memory: 32Mi
+      volumes:
+        - name: socket-dir
+          emptyDir: {}

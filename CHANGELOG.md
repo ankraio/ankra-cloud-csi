@@ -5,6 +5,15 @@ All notable changes to this project are documented here. The format follows
 
 ## Unreleased
 
+### Added
+
+- The COSI driver `cosi.ankra.cloud` (chart `ankra-cloud-cosi` 0.1.0, image
+  `share.ankra.cloud/library/ankra-cloud-cosi:v0.1.0`) for Ankra Cloud object storage, on the COSI `v1alpha1` API
+  (CRDs, controller and provisioner sidecar v0.2.2). A BucketClaim enables object storage in its BucketClass's `zone`
+  and creates an S3 bucket there; a BucketAccess (`authenticationType: Key`) gets the zone's S3 key. Every access in a
+  zone gets the same account key, revoking leaves the key in place, and a bucket is deleted only when it is empty.
+  `deploy/cosi-controller` installs the COSI CRDs and controller with the release image pinned by digest.
+
 ## v0.3.0
 
 ### Added
