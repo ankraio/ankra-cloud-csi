@@ -48,7 +48,7 @@ helm-lint:
 	$(RENDER) --api-versions snapshot.storage.k8s.io/v1/VolumeSnapshotClass >/dev/null
 	helm lint --strict $(COSI_CHART) --set api.token=lint-placeholder
 	helm lint --strict $(COSI_CHART) --set api.existingSecret=ankra-cloud-csi-api --set bucketClass.zone=fsn1 \
-		--set bucketClass.bucketNamePrefix=team-a --api-versions $(COSI_API)
+		--set bucketClass.bucketNamePrefix=team-a
 	$(COSI_RENDER) --api-versions $(COSI_API) --set bucketClass.zone=fsn1 --show-only templates/bucketclass.yaml >/dev/null
 	$(COSI_RENDER) --api-versions $(COSI_API) --show-only templates/bucketaccessclass.yaml >/dev/null
 	@rendered="$$(mktemp -d)"; \
