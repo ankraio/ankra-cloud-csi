@@ -1,0 +1,14 @@
+# The COSI CRDs (objectstorage.k8s.io/v1alpha1) and the COSI controller, release v0.2.2, which the ankra-cloud-cosi
+# driver needs installed first. The upstream kustomization at that tag names a staging build of the controller; this
+# pins the promoted release image by digest instead. Installs into the namespace container-object-storage-system.
+#
+#   kubectl apply -k 'https://github.com/ankraio/ankra-cloud-csi//deploy/cosi-controller?ref=main'
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - https://github.com/kubernetes-sigs/container-object-storage-interface//?ref=v0.2.2
+images:
+  - name: gcr.io/k8s-staging-sig-storage/objectstorage-controller
+    newName: registry.k8s.io/sig-storage/objectstorage-controller
+    newTag: v0.2.2
+    digest: sha256:1a403232505f78038737f3ffee2da053138a3acb7e225ff81c35980029fad162

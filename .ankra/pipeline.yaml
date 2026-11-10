@@ -1,12 +1,14 @@
 # ankra-cloud-csi on Ankra Pipelines.
 #
 # Every push and pull request: go vet, the unit tests, the csi-sanity suite, golangci-lint, govulncheck and the chart
-# gates. A pull request also builds the multi-arch image and throws it away. A push to main publishes the image as
-# sha-<7> and is also the release: when the chart's appVersion is not published yet, the same run publishes the image
-# as v<semver> and pushes the chart to oci://share.ankra.cloud/charts. Nobody pushes a tag; a release the registry
-# failed is repeated with 'ankra pipeline run --ref main', which publishes only what is still missing. Images are
-# built without a daemon: apko assembles the base, ko cross-compiles the driver onto it for linux/amd64 and
-# linux/arm64 and attaches an SPDX SBOM (hack/image.sh).
+# gates. Two drivers are built from this repository, each with its own image and chart: the CSI driver
+# (ankra-cloud-csi) and the COSI driver (ankra-cloud-cosi). A pull request also builds both multi-arch images and
+# throws them away. A push to main publishes both images as sha-<7> and is also the release: when a chart's
+# appVersion is not published yet, the same run publishes that driver's image as v<semver> and pushes the chart to
+# oci://share.ankra.cloud/charts. Nobody pushes a tag; a release the registry failed is repeated with
+# 'ankra pipeline run --ref main', which publishes only what is still missing. Images are built without a daemon: apko
+# assembles the base, ko cross-compiles the driver onto it for linux/amd64 and linux/arm64 and attaches an SPDX SBOM
+# (hack/image.sh).
 #
 # share_login is the Docker config for share.ankra.cloud, from the organisation's connected registry
 # share-ankra-cloud. It is a protected section: the image and chart stages publish only once an administrator has
@@ -177,8 +179,11 @@ stages:
       go install github.com/google/ko@v0.19.1
       PATH="$(./hack/ci-apko.sh):${GOPATH}/bin:${PATH}"
       export PATH
+      commit_tag="sha-$(printf '%s' "${ANKRA_HEAD_SHA}" | cut -c1-7)"
       IMAGE=share.ankra.cloud/library/ankra-cloud-csi BASE_IMAGE=share.ankra.cloud/base/ankra-cloud-csi-base \
-        TAGS="sha-$(printf '%s' "${ANKRA_HEAD_SHA}" | cut -c1-7)" PUSH=false ./hack/image.sh
+        TAGS="${commit_tag}" PUSH=false ./hack/image.sh
+      IMAGE=share.ankra.cloud/library/ankra-cloud-cosi BASE_IMAGE=share.ankra.cloud/base/ankra-cloud-cosi-base \
+        COMMAND=./cmd/ankra-cloud-cosi BASE_CONFIG=build/cosi-base.apko.yaml TAGS="${commit_tag}" PUSH=false ./hack/image.sh
     cache:
       - key: "go-image-${{ hashFiles('go.sum') }}"
         paths:
@@ -215,20 +220,27 @@ stages:
       DOCKER_CONFIG="$(mktemp -d)"
       export DOCKER_CONFIG
       cp /run/agent-secrets/share_login "${DOCKER_CONFIG}/config.json"
-      version="$(sed -n 's/^appVersion: *"\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' charts/ankra-cloud-csi/Chart.yaml)"
-      case "${version}" in
-        v[0-9]*) ;;
-        *) echo "image: charts/ankra-cloud-csi/Chart.yaml has appVersion '${version}', not v<semver>" >&2; exit 1 ;;
-      esac
       commit_tag="sha-$(printf '%s' "${ANKRA_HEAD_SHA}" | cut -c1-7)"
-      # The version comes first so the released binary reports it; a commit that is not a release reports its commit.
-      tags="$(./hack/unpublished-tags.sh share.ankra.cloud/library/ankra-cloud-csi "${version}" "${commit_tag}")"
-      if [ -z "${tags}" ]; then
-        echo "image: ${version} and ${commit_tag} are already published"
-        exit 0
-      fi
-      IMAGE=share.ankra.cloud/library/ankra-cloud-csi BASE_IMAGE=share.ankra.cloud/base/ankra-cloud-csi-base \
-        TAGS="${tags}" PUSH=true ./hack/image.sh
+      # Each driver is versioned by its own chart's appVersion: the CSI driver by charts/ankra-cloud-csi, the COSI
+      # driver by charts/ankra-cloud-cosi. Both images get the commit tag.
+      publish() {
+        name="$1"
+        version="$(sed -n 's/^appVersion: *"\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' "charts/${name}/Chart.yaml")"
+        case "${version}" in
+          v[0-9]*) ;;
+          *) echo "image: charts/${name}/Chart.yaml has appVersion '${version}', not v<semver>" >&2; exit 1 ;;
+        esac
+        # The version comes first so the released binary reports it; a commit that is not a release reports its commit.
+        tags="$(./hack/unpublished-tags.sh "share.ankra.cloud/library/${name}" "${version}" "${commit_tag}")"
+        if [ -z "${tags}" ]; then
+          echo "image: ${name} ${version} and ${commit_tag} are already published"
+          return 0
+        fi
+        IMAGE="share.ankra.cloud/library/${name}" BASE_IMAGE="share.ankra.cloud/base/${name}-base" \
+          COMMAND="./cmd/${name}" BASE_CONFIG="$2" TAGS="${tags}" PUSH=true ./hack/image.sh
+      }
+      publish ankra-cloud-csi build/base.apko.yaml
+      publish ankra-cloud-cosi build/cosi-base.apko.yaml
     cache:
       - key: "go-image-${{ hashFiles('go.sum') }}"
         paths:
@@ -256,18 +268,24 @@ stages:
       mkdir -p "${GOTMPDIR}" "${HELM_CONFIG_HOME}"
       PATH="$(./hack/ci-helm.sh):${PATH}"
       export PATH
-      chart_version="$(sed -n 's/^version: *"\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' charts/ankra-cloud-csi/Chart.yaml)"
-      # Anything but "not found" is an error: pushing after a failed lookup would replace a published chart.
-      if answer="$(helm show chart oci://share.ankra.cloud/charts/ankra-cloud-csi --version "${chart_version}" \
-        --registry-config /run/agent-secrets/share_login 2>&1 >/dev/null)"; then
-        echo "chart: ankra-cloud-csi ${chart_version} is already published"
-        exit 0
-      fi
-      case "${answer}" in
-        *"not found"*) ;;
-        *) echo "chart: could not look up ankra-cloud-csi ${chart_version}: ${answer}" >&2; exit 1 ;;
-      esac
-      package_directory="$(mktemp -d "${GOTMPDIR}/chart.XXXXXX")"
-      helm package charts/ankra-cloud-csi --destination "${package_directory}"
-      helm push "${package_directory}"/ankra-cloud-csi-*.tgz oci://share.ankra.cloud/charts \
-        --registry-config /run/agent-secrets/share_login
+      # Each chart is published once per chart version: ankra-cloud-csi and ankra-cloud-cosi.
+      publish() {
+        name="$1"
+        chart_version="$(sed -n 's/^version: *"\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' "charts/${name}/Chart.yaml")"
+        # Anything but "not found" is an error: pushing after a failed lookup would replace a published chart.
+        if answer="$(helm show chart "oci://share.ankra.cloud/charts/${name}" --version "${chart_version}" \
+          --registry-config /run/agent-secrets/share_login 2>&1 >/dev/null)"; then
+          echo "chart: ${name} ${chart_version} is already published"
+          return 0
+        fi
+        case "${answer}" in
+          *"not found"*) ;;
+          *) echo "chart: could not look up ${name} ${chart_version}: ${answer}" >&2; exit 1 ;;
+        esac
+        package_directory="$(mktemp -d "${GOTMPDIR}/chart.XXXXXX")"
+        helm package "charts/${name}" --destination "${package_directory}"
+        helm push "${package_directory}/${name}-${chart_version}.tgz" oci://share.ankra.cloud/charts \
+          --registry-config /run/agent-secrets/share_login
+      }
+      publish ankra-cloud-csi
+      publish ankra-cloud-cosi

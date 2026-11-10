@@ -1,7 +1,7 @@
-// Package cloud is the narrow slice of the Ankra Cloud public API the CSI driver needs: storages (volumes), their
-// snapshots, servers and operations. The driver depends only on the API interface; Client implements it with the
-// generated client in internal/ankraapi and, for the operations that client does not have yet, with thin HTTP
-// calls (pending.go). Tests use cloudfake.
+// Package cloud is the narrow slice of the Ankra Cloud public API the drivers need: storages (volumes), their
+// snapshots, servers and operations for the CSI driver, and object storage (objectstorage.go) for the COSI driver. The
+// CSI driver depends only on the API interface; Client implements it with the generated client in internal/ankraapi
+// and, for the operations that client does not have yet, with thin HTTP calls (pending.go). Tests use cloudfake.
 package cloud
 
 import (
