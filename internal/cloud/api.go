@@ -6,6 +6,7 @@ package cloud
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -193,21 +194,71 @@ func IsNotFound(callError error) bool {
 	return StatusCode(callError) == http.StatusNotFound
 }
 
-// storageBackendUnavailableDetail opens the API's detail when the zone's tier, or the Ankra Local pool of the node a
-// local storage must land on, takes no new storage (the API's ErrStorageBackendUnavailable, ErrLocalPoolFull among them).
+// The reasons the API names, in the "reason" member of its problem document, when it refuses a request because the
+// platform is short of something rather than because of anything the account did.
+const (
+	// ShortfallReasonCapacity is a zone without room for the request right now; the API answers it 503.
+	ShortfallReasonCapacity = "capacity_unavailable"
+	// ShortfallReasonNotOffered is something the zone does not take; the API answers it 409. A storage whose tier, or
+	// whose node's Ankra Local pool, takes no new storage is refused with it.
+	ShortfallReasonNotOffered = "not_available_in_zone"
+)
+
+// StorageShortfallDetail is the detail the API puts beside a shortfall reason when it refuses a new storage. It is
+// prose for the customer and is reworded without notice, so nothing may match on it: the fakes carry it to answer as
+// the API does, and IsStorageUnavailable reads the reason.
+const StorageShortfallDetail = "The requested storage is not available in this zone right now. " +
+	"Try another storage tier or another zone of the region, or try again later."
+
+// storageBackendUnavailableDetail opened the API's detail for the same refusal before the API named a reason: an API
+// of that age answers 409 with this text and no reason member.
 const storageBackendUnavailableDetail = "the storage backend is not available in this zone"
 
 // IsStorageUnavailable reports whether the API refused a new storage because its tier, or the node it must land on, has
 // no room for it: another node, or a later attempt once room was made, can take it.
+//
+// The reason member of the problem document decides, with the status the API pairs it with. The detail does not: the
+// driver once matched on the detail's wording, the API reworded it for customers a day later, and from then on a full
+// Ankra Local pool was answered as a final failure, which external-provisioner retries on the same node for as long as
+// the pod waits. Only the wording of an API that had no reason member yet is still recognised by its text.
 func IsStorageUnavailable(callError error) bool {
 	var apiError *ankraapi.Error
-	return errors.As(callError, &apiError) && apiError.StatusCode == http.StatusConflict &&
-		strings.Contains(apiError.Detail, storageBackendUnavailableDetail)
+	if !errors.As(callError, &apiError) {
+		return false
+	}
+	switch shortfallReason(apiError) {
+	case ShortfallReasonCapacity:
+		return apiError.StatusCode == http.StatusServiceUnavailable
+	case ShortfallReasonNotOffered:
+		return apiError.StatusCode == http.StatusConflict
+	}
+	return apiError.StatusCode == http.StatusConflict && strings.Contains(apiError.Detail, storageBackendUnavailableDetail)
+}
+
+// shortfallReason is the reason member of the problem document the API answered with, "" when the answer has none or
+// is not a JSON object.
+func shortfallReason(apiError *ankraapi.Error) string {
+	var problem struct {
+		Reason string `json:"reason"`
+	}
+	if decodeError := json.Unmarshal(apiError.Body, &problem); decodeError != nil {
+		return ""
+	}
+	return problem.Reason
 }
 
 // NewError builds the error the API would return, for fakes and the thin HTTP calls.
 func NewError(statusCode int, detail string) error {
 	return &ankraapi.Error{StatusCode: statusCode, Title: http.StatusText(statusCode), Detail: detail}
+}
+
+// NewShortfallError builds the error the API returns for a platform shortfall: the problem document with its reason
+// member, as the body the client keeps. For fakes.
+func NewShortfallError(statusCode int, detail string, reason string) error {
+	body, _ := json.Marshal(map[string]any{
+		"type": "about:blank", "title": http.StatusText(statusCode), "status": statusCode, "detail": detail, "reason": reason,
+	})
+	return &ankraapi.Error{StatusCode: statusCode, Title: http.StatusText(statusCode), Detail: detail, Body: body}
 }
 
 // ErrOperationFailed is returned by WaitForOperation when the operation ends in failure or is cancelled.
