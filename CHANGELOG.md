@@ -14,6 +14,8 @@ All notable changes to this project are documented here. The format follows
   zone gets the same account key, revoking leaves the key in place, and a bucket is deleted only when it is empty.
   `deploy/cosi-controller` installs the COSI CRDs and controller with the release image pinned by digest.
 
+## v0.3.1
+
 ### Fixed
 
 - A `local-nvme` storage refused because the Ankra Local pool of its node is full is answered `RESOURCE_EXHAUSTED`
