@@ -43,6 +43,8 @@ type API struct {
 	failures map[string]int
 	// failureDetails is the problem detail a failing method answers with; "injected failure" when none was given.
 	failureDetails map[string]string
+	// failureReasons is the reason member a failing method's problem document carries; none when it has no entry.
+	failureReasons map[string]string
 	calls          map[string]int
 	now            func() time.Time
 }
@@ -52,7 +54,8 @@ var _ cloud.API = (*API)(nil)
 // New returns an empty fake.
 func New() *API {
 	return &API{volumes: map[string]*cloud.Volume{}, snapshots: map[string]*cloud.Snapshot{}, servers: map[string]cloud.Server{},
-		operations: map[string]cloud.Operation{}, failures: map[string]int{}, failureDetails: map[string]string{}, calls: map[string]int{},
+		operations: map[string]cloud.Operation{}, failures: map[string]int{}, failureDetails: map[string]string{}, failureReasons: map[string]string{},
+		calls:            map[string]int{},
 		zoneDefaultTiers: map[string]string{}, serverNodes: map[string]string{}, localVolumeNodes: map[string]string{},
 		localRooms: map[string]int64{}, tierRefusals: map[string]string{},
 		now: func() time.Time { return time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC) }}
@@ -133,13 +136,15 @@ func (fake *API) AddSnapshot(snapshot cloud.Snapshot) {
 	fake.snapshots[snapshot.ID] = &copied
 }
 
-// FailWith makes every later call of method answer with statusCode; 0 clears it.
+// FailWith makes every later call of method answer with statusCode; 0 clears it. A detail or a reason given for the
+// method before is dropped.
 func (fake *API) FailWith(method string, statusCode int) {
 	fake.mutex.Lock()
 	defer fake.mutex.Unlock()
+	delete(fake.failureDetails, method)
+	delete(fake.failureReasons, method)
 	if statusCode == 0 {
 		delete(fake.failures, method)
-		delete(fake.failureDetails, method)
 		return
 	}
 	fake.failures[method] = statusCode
@@ -151,6 +156,15 @@ func (fake *API) FailWithDetail(method string, statusCode int, detail string) {
 	fake.mutex.Lock()
 	defer fake.mutex.Unlock()
 	fake.failureDetails[method] = detail
+}
+
+// FailWithShortfall makes every later call of method answer as the API answers a platform shortfall: statusCode, the
+// customer's wording as the detail, and reason as the reason member of the problem document.
+func (fake *API) FailWithShortfall(method string, statusCode int, reason string) {
+	fake.FailWithDetail(method, statusCode, cloud.StorageShortfallDetail)
+	fake.mutex.Lock()
+	defer fake.mutex.Unlock()
+	fake.failureReasons[method] = reason
 }
 
 // Calls is how often method was called.
@@ -184,6 +198,9 @@ func (fake *API) enter(method string) error {
 		detail := fake.failureDetails[method]
 		if detail == "" {
 			detail = "injected failure"
+		}
+		if reason, isShortfall := fake.failureReasons[method]; isShortfall {
+			return cloud.NewShortfallError(statusCode, detail, reason)
 		}
 		return cloud.NewError(statusCode, detail)
 	}
@@ -269,15 +286,14 @@ func (fake *API) CreateVolume(_ context.Context, request cloud.CreateVolumeReque
 	if size <= 0 {
 		return cloud.Volume{}, cloud.Operation{}, cloud.NewError(http.StatusBadRequest, "size_gibibytes is required")
 	}
-	if refusal, isRefused := fake.tierRefusals[tier]; isRefused {
-		return cloud.Volume{}, cloud.Operation{}, cloud.NewError(http.StatusConflict, storageUnavailable+": "+refusal)
+	if _, isRefused := fake.tierRefusals[tier]; isRefused {
+		return cloud.Volume{}, cloud.Operation{}, storageShortfall()
 	}
 	var node string
 	if tier == LocalStorageTier {
 		node = fake.localNode(request)
 		if room, isGated := fake.localRooms[node]; isGated && size > room {
-			return cloud.Volume{}, cloud.Operation{}, cloud.NewError(http.StatusConflict,
-				fmt.Sprintf("%s: the node's Ankra Local pool takes no new volumes: %d GiB more would pass its room of %d GiB", storageUnavailable, size, room))
+			return cloud.Volume{}, cloud.Operation{}, storageShortfall()
 		}
 	}
 	identifier := fake.nextIdentifier("5a")
@@ -482,9 +498,14 @@ func (fake *API) GetServer(_ context.Context, serverID string) (cloud.Server, er
 	return server, nil
 }
 
-// storageUnavailable opens the API's detail for a tier or a node that takes no new storage
-// (ErrStorageBackendUnavailable).
+// storageUnavailable opens the refusal the capacity answer carries for a tier or a node that takes no new storage.
 const storageUnavailable = "the storage backend is not available in this zone"
+
+// storageShortfall is the API's answer to a new storage whose tier, or whose node's Ankra Local pool, takes none: 409
+// with the customer's wording, which says nothing about the pool, and the reason member beside it.
+func storageShortfall() error {
+	return cloud.NewShortfallError(http.StatusConflict, cloud.StorageShortfallDetail, cloud.ShortfallReasonNotOffered)
+}
 
 // maximumStorageGibibytes mirrors the API's domain.MaximumStorageGibibytes.
 const maximumStorageGibibytes = 4096

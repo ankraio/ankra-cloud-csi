@@ -14,6 +14,17 @@ All notable changes to this project are documented here. The format follows
   zone gets the same account key, revoking leaves the key in place, and a bucket is deleted only when it is empty.
   `deploy/cosi-controller` installs the COSI CRDs and controller with the release image pinned by digest.
 
+### Fixed
+
+- A `local-nvme` storage refused because the Ankra Local pool of its node is full is answered `RESOURCE_EXHAUSTED`
+  again, so external-provisioner hands the claim back to the scheduler and the pod is placed on a node with room. The
+  driver recognised that refusal by the wording of the API's `detail`. The API has since reworded the text for
+  customers and names the refusal in a `reason` member of its problem document, so the driver answered
+  `FAILED_PRECONDITION` (for the API's 409) or `UNAVAILABLE` (for its 503), and external-provisioner retried the full
+  node for as long as the pod waited. The driver now reads `reason` (`not_available_in_zone` with 409,
+  `capacity_unavailable` with 503) and still recognises the wording of an API that sends none. The tests send the
+  API's current body through the HTTP client, and the fake API answers with it too.
+
 ## v0.3.0
 
 ### Added

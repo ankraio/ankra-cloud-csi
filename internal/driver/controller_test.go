@@ -574,20 +574,68 @@ func TestNewRefusesIncompleteOptions(t *testing.T) {
 	}
 }
 
+// external-provisioner hands a claim back to the scheduler, to pick another node, only for ResourceExhausted. Any other
+// code makes it retry the node the claim was bound to, for as long as the pod waits.
 func TestCreateVolumeOnANodeWithoutRoomAsksForAnotherNode(t *testing.T) {
+	request := createRequest("pvc-full-node", gibibyte, map[string]string{ParameterTier: TierLocalNVMe})
+	request.AccessibilityRequirements = &csi.TopologyRequirement{
+		Requisite: []*csi.Topology{{Segments: map[string]string{TopologyZoneKey: testZone, TopologyNodeKey: testServerID}}},
+		Preferred: []*csi.Topology{{Segments: map[string]string{TopologyZoneKey: testZone, TopologyNodeKey: testServerID}}},
+	}
+	cases := []struct {
+		name string
+		fail func(api *cloudfake.API)
+		code codes.Code
+	}{
+		{"the node's pool or the tier takes no new storage", func(api *cloudfake.API) {
+			api.FailWithShortfall("CreateVolume", http.StatusConflict, cloud.ShortfallReasonNotOffered)
+		}, codes.ResourceExhausted},
+		{"the zone has no room right now", func(api *cloudfake.API) {
+			api.FailWithShortfall("CreateVolume", http.StatusServiceUnavailable, cloud.ShortfallReasonCapacity)
+		}, codes.ResourceExhausted},
+		{"the wording of an API without a reason member", func(api *cloudfake.API) {
+			api.FailWithDetail("CreateVolume", http.StatusConflict,
+				"the storage backend is not available in this zone: the node's Ankra Local pool takes no new volumes: 60 GiB more would pass 80 %")
+		}, codes.ResourceExhausted},
+		{"today's wording without a reason member is not matched by its text", func(api *cloudfake.API) {
+			api.FailWithDetail("CreateVolume", http.StatusConflict, cloud.StorageShortfallDetail)
+		}, codes.FailedPrecondition},
+		{"another conflict", func(api *cloudfake.API) {
+			api.FailWithDetail("CreateVolume", http.StatusConflict, "the storage is attached")
+		}, codes.FailedPrecondition},
+		{"the API is unavailable for another reason", func(api *cloudfake.API) {
+			api.FailWith("CreateVolume", http.StatusServiceUnavailable)
+		}, codes.Unavailable},
+		{"a reason the driver does not know", func(api *cloudfake.API) {
+			api.FailWithShortfall("CreateVolume", http.StatusConflict, "something_else")
+		}, codes.FailedPrecondition},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			api := cloudfake.New()
+			csiDriver := newTestDriver(t, api, newFakeHost())
+			testCase.fail(api)
+			_, createError := csiDriver.CreateVolume(context.Background(), request)
+			expectCode(t, createError, testCase.code)
+		})
+	}
+}
+
+// The fake refuses a storage that passes the room of its node's pool the way the API does, so this is the path a full
+// node takes from the API's answer to the code external-provisioner acts on.
+func TestCreateVolumePastTheRoomOfItsNodeAsksForAnotherNode(t *testing.T) {
 	api := cloudfake.New()
 	csiDriver := newTestDriver(t, api, newFakeHost())
-	api.FailWithDetail("CreateVolume", http.StatusConflict,
-		"the storage backend is not available in this zone: the node's Ankra Local pool takes no new volumes: 60 GiB more would pass 80 %")
-	request := createRequest("pvc-full-node", gibibyte, map[string]string{ParameterTier: TierLocalNVMe})
+	api.PlaceServer(testServerID, testComputeNode)
+	api.SetLocalRoom(testComputeNode, 5)
+	request := createRequest("pvc-past-the-room", 10*gibibyte, map[string]string{ParameterTier: TierLocalNVMe})
 	request.AccessibilityRequirements = &csi.TopologyRequirement{
 		Requisite: []*csi.Topology{{Segments: map[string]string{TopologyZoneKey: testZone, TopologyNodeKey: testServerID}}},
 		Preferred: []*csi.Topology{{Segments: map[string]string{TopologyZoneKey: testZone, TopologyNodeKey: testServerID}}},
 	}
 	_, createError := csiDriver.CreateVolume(context.Background(), request)
 	expectCode(t, createError, codes.ResourceExhausted)
-
-	api.FailWithDetail("CreateVolume", http.StatusConflict, "the storage is attached")
-	_, otherConflictError := csiDriver.CreateVolume(context.Background(), request)
-	expectCode(t, otherConflictError, codes.FailedPrecondition)
+	if api.VolumeCount() != 0 {
+		t.Fatalf("a refused storage was created: %d storages", api.VolumeCount())
+	}
 }
