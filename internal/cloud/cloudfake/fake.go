@@ -1,5 +1,6 @@
-// Package cloudfake is an in-memory cloud.API for tests: operations finish at once, and every call can be made to
-// fail with an API status.
+// Package cloudfake is an in-memory cloud.API for tests: operations finish at once unless a test makes creates or
+// deletes take time (SettleCreates, SettleDeletes), and every call can be made to fail with an API status or with an
+// error that has none.
 package cloudfake
 
 import (
@@ -21,6 +22,17 @@ const LocalStorageTier = "local-nvme"
 
 // MaximumAttachedStorages mirrors the API's limit of storages on one server (domain.MaximumStorageDevices).
 const MaximumAttachedStorages = 16
+
+// Never, as the number of reads a storage settles after, keeps the storage as it is until SettleVolume says otherwise.
+const Never = -1
+
+// settlement is what becomes of a storage an operation is working on: the state it ends in, after that many more reads
+// of the storage or of the operation.
+type settlement struct {
+	operationID string
+	polls       int
+	state       string
+}
 
 // API is the fake. The zero value is not usable; call New.
 type API struct {
@@ -47,6 +59,13 @@ type API struct {
 	failureReasons map[string]string
 	calls          map[string]int
 	now            func() time.Time
+	// failureErrors is the error a failing method returns as it is, in place of an API status.
+	failureErrors map[string]error
+	// createSettlement and deleteSettlement make creates and deletes take time; nil finishes them at once.
+	createSettlement *settlement
+	deleteSettlement *settlement
+	// settlements are the storages an operation is still working on, by storage id.
+	settlements map[string]*settlement
 }
 
 var _ cloud.API = (*API)(nil)
@@ -55,6 +74,7 @@ var _ cloud.API = (*API)(nil)
 func New() *API {
 	return &API{volumes: map[string]*cloud.Volume{}, snapshots: map[string]*cloud.Snapshot{}, servers: map[string]cloud.Server{},
 		operations: map[string]cloud.Operation{}, failures: map[string]int{}, failureDetails: map[string]string{}, failureReasons: map[string]string{},
+		failureErrors: map[string]error{}, settlements: map[string]*settlement{},
 		calls:            map[string]int{},
 		zoneDefaultTiers: map[string]string{}, serverNodes: map[string]string{}, localVolumeNodes: map[string]string{},
 		localRooms: map[string]int64{}, tierRefusals: map[string]string{},
@@ -136,13 +156,14 @@ func (fake *API) AddSnapshot(snapshot cloud.Snapshot) {
 	fake.snapshots[snapshot.ID] = &copied
 }
 
-// FailWith makes every later call of method answer with statusCode; 0 clears it. A detail or a reason given for the
-// method before is dropped.
+// FailWith makes every later call of method answer with statusCode; 0 clears it. A detail, a reason or an error given
+// for the method before is dropped.
 func (fake *API) FailWith(method string, statusCode int) {
 	fake.mutex.Lock()
 	defer fake.mutex.Unlock()
 	delete(fake.failureDetails, method)
 	delete(fake.failureReasons, method)
+	delete(fake.failureErrors, method)
 	if statusCode == 0 {
 		delete(fake.failures, method)
 		return
@@ -165,6 +186,56 @@ func (fake *API) FailWithShortfall(method string, statusCode int, reason string)
 	fake.mutex.Lock()
 	defer fake.mutex.Unlock()
 	fake.failureReasons[method] = reason
+}
+
+// FailWithError makes every later call of method return failure as it is: an error without an HTTP status, which is
+// what a call that got no answer from the API returns. FailWith(method, 0) clears it.
+func (fake *API) FailWithError(method string, failure error) {
+	fake.FailWith(method, 0)
+	fake.mutex.Lock()
+	defer fake.mutex.Unlock()
+	fake.failureErrors[method] = failure
+}
+
+// SettleCreates makes every later CreateVolume take time, as the API's does: the storage is answered `creating` behind
+// a running operation, and after polls reads of the storage or of the operation it is state, cloud.StorageStateOnline
+// or cloud.StorageStateError with the operation failed. Never keeps it `creating`. An empty state creates online at
+// once again.
+func (fake *API) SettleCreates(polls int, state string) {
+	fake.mutex.Lock()
+	defer fake.mutex.Unlock()
+	fake.createSettlement = nil
+	if state != "" {
+		fake.createSettlement = &settlement{polls: polls, state: state}
+	}
+}
+
+// SettleDeletes makes every later DeleteVolume take time: the storage is left `deleting` behind a running operation,
+// and after polls reads of the storage or of the operation it is gone (cloud.StorageStateDeleted) or back in
+// cloud.StorageStateError with the operation failed, which is where the API leaves a storage whose delete failed.
+// Never keeps it `deleting`. An empty state deletes at once again.
+func (fake *API) SettleDeletes(polls int, state string) {
+	fake.mutex.Lock()
+	defer fake.mutex.Unlock()
+	fake.deleteSettlement = nil
+	if state != "" {
+		fake.deleteSettlement = &settlement{polls: polls, state: state}
+	}
+}
+
+// SettleVolume makes one storage end in state after polls more reads of it, whatever was to become of it before; 0 is
+// at once.
+func (fake *API) SettleVolume(volumeID string, polls int, state string) {
+	fake.mutex.Lock()
+	defer fake.mutex.Unlock()
+	outcome := &settlement{polls: polls, state: state}
+	if pending, isPending := fake.settlements[volumeID]; isPending {
+		outcome.operationID = pending.operationID
+	}
+	fake.settlements[volumeID] = outcome
+	if polls == 0 {
+		fake.settle(volumeID, outcome)
+	}
 }
 
 // Calls is how often method was called.
@@ -194,6 +265,9 @@ func (fake *API) VolumeCount() int {
 
 func (fake *API) enter(method string) error {
 	fake.calls[method]++
+	if failure, isFailing := fake.failureErrors[method]; isFailing {
+		return failure
+	}
 	if statusCode, isFailing := fake.failures[method]; isFailing {
 		detail := fake.failureDetails[method]
 		if detail == "" {
@@ -216,6 +290,66 @@ func (fake *API) succeeded() cloud.Operation {
 	operation := cloud.Operation{ID: fake.nextIdentifier("0e"), Status: cloud.OperationStatusSucceeded}
 	fake.operations[operation.ID] = operation
 	return operation
+}
+
+// running hands out an operation that is still working on a storage and ends as outcome says.
+func (fake *API) running(volumeID string, outcome settlement) cloud.Operation {
+	operation := cloud.Operation{ID: fake.nextIdentifier("0e"), Status: cloud.OperationStatusRunning}
+	fake.operations[operation.ID] = operation
+	outcome.operationID = operation.ID
+	fake.settlements[volumeID] = &outcome
+	return operation
+}
+
+// poll counts one read of a storage, or of the operation working on it, and settles the storage when its time has
+// come.
+func (fake *API) poll(volumeID string) {
+	pending, isPending := fake.settlements[volumeID]
+	if !isPending || pending.polls < 0 {
+		return
+	}
+	if pending.polls > 0 {
+		pending.polls--
+		return
+	}
+	fake.settle(volumeID, pending)
+}
+
+// settle ends the operation working on a storage and puts the storage in the state the operation leaves it in.
+func (fake *API) settle(volumeID string, outcome *settlement) {
+	delete(fake.settlements, volumeID)
+	operation, hasOperation := fake.operations[outcome.operationID]
+	operation.Status = cloud.OperationStatusSucceeded
+	volume, isPresent := fake.volumes[volumeID]
+	switch {
+	case !isPresent:
+	case outcome.state == cloud.StorageStateDeleted:
+		fake.removeVolume(volumeID)
+	case outcome.state == cloud.StorageStateError:
+		volume.State = cloud.StorageStateError
+		operation.Status, operation.Step, operation.Error = cloud.OperationStatusFailed, "storage", "injected failure"
+	default:
+		volume.State = outcome.state
+	}
+	if hasOperation {
+		fake.operations[outcome.operationID] = operation
+	}
+}
+
+// removeVolume drops a storage and gives its room back to the Ankra Local pool of its node.
+func (fake *API) removeVolume(volumeID string) {
+	volume, isPresent := fake.volumes[volumeID]
+	if !isPresent {
+		return
+	}
+	if node, isLocal := fake.localVolumeNodes[volumeID]; isLocal {
+		if room, isGated := fake.localRooms[node]; isGated {
+			fake.localRooms[node] = room + volume.SizeGibibytes
+		}
+	}
+	delete(fake.volumes, volumeID)
+	delete(fake.localVolumeNodes, volumeID)
+	delete(fake.settlements, volumeID)
 }
 
 func notFound(kind string, identifier string) error {
@@ -244,6 +378,7 @@ func (fake *API) GetVolume(_ context.Context, volumeID string) (cloud.Volume, er
 	if failure := fake.enter("GetVolume"); failure != nil {
 		return cloud.Volume{}, failure
 	}
+	fake.poll(volumeID)
 	volume, isPresent := fake.volumes[volumeID]
 	if !isPresent {
 		return cloud.Volume{}, notFound("storage", volumeID)
@@ -251,7 +386,7 @@ func (fake *API) GetVolume(_ context.Context, volumeID string) (cloud.Volume, er
 	return *volume, nil
 }
 
-// CreateVolume creates a storage, online at once.
+// CreateVolume creates a storage, online at once unless SettleCreates makes it take time.
 func (fake *API) CreateVolume(_ context.Context, request cloud.CreateVolumeRequest) (cloud.Volume, cloud.Operation, error) {
 	fake.mutex.Lock()
 	defer fake.mutex.Unlock()
@@ -306,7 +441,11 @@ func (fake *API) CreateVolume(_ context.Context, request cloud.CreateVolumeReque
 	volume := &cloud.Volume{ID: identifier, Zone: request.Zone, Title: request.Title, Tier: tier,
 		State: cloud.StorageStateOnline, SizeGibibytes: size, DeviceSerial: cloud.DeviceSerialFor(identifier), CreatedAt: fake.now()}
 	fake.volumes[identifier] = volume
-	return *volume, fake.succeeded(), nil
+	if fake.createSettlement == nil {
+		return *volume, fake.succeeded(), nil
+	}
+	volume.State = cloud.StorageStateCreating
+	return *volume, fake.running(identifier, *fake.createSettlement), nil
 }
 
 // localNode is where a new local storage lands: next to the placement server, else on the source's node, else on
@@ -321,7 +460,8 @@ func (fake *API) localNode(request cloud.CreateVolumeRequest) string {
 	return "least-loaded-node"
 }
 
-// DeleteVolume deletes a detached storage.
+// DeleteVolume deletes a detached storage, at once unless SettleDeletes makes it take time. A storage that is already
+// being deleted is refused, as the API refuses it.
 func (fake *API) DeleteVolume(_ context.Context, volumeID string) (cloud.Operation, error) {
 	fake.mutex.Lock()
 	defer fake.mutex.Unlock()
@@ -335,13 +475,14 @@ func (fake *API) DeleteVolume(_ context.Context, volumeID string) (cloud.Operati
 	if volume.ServerID != "" {
 		return cloud.Operation{}, cloud.NewError(http.StatusConflict, "the storage is attached")
 	}
-	if node, isLocal := fake.localVolumeNodes[volumeID]; isLocal {
-		if room, isGated := fake.localRooms[node]; isGated {
-			fake.localRooms[node] = room + volume.SizeGibibytes
-		}
+	if volume.State == cloud.StorageStateDeleting {
+		return cloud.Operation{}, cloud.NewError(http.StatusConflict, "the storage is already being deleted")
 	}
-	delete(fake.volumes, volumeID)
-	delete(fake.localVolumeNodes, volumeID)
+	if fake.deleteSettlement != nil {
+		volume.State = cloud.StorageStateDeleting
+		return fake.running(volumeID, *fake.deleteSettlement), nil
+	}
+	fake.removeVolume(volumeID)
 	return fake.succeeded(), nil
 }
 
@@ -554,6 +695,12 @@ func (fake *API) GetOperation(_ context.Context, operationID string) (cloud.Oper
 	defer fake.mutex.Unlock()
 	if failure := fake.enter("GetOperation"); failure != nil {
 		return cloud.Operation{}, failure
+	}
+	for volumeID, pending := range fake.settlements {
+		if pending.operationID == operationID {
+			fake.poll(volumeID)
+			break
+		}
 	}
 	operation, isPresent := fake.operations[operationID]
 	if !isPresent {

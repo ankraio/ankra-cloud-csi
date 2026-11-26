@@ -145,9 +145,9 @@ The binary reads these environment variables, which the chart sets:
 | CSI | Ankra Cloud |
 | --- | --- |
 | Volume id | Storage id. The CSI volume name (`pvc-…`) is the storage title, the idempotency key: `CreateVolume` lists storages and reuses the one with that title. Storages have no labels yet; `csi.ankra.cloud/volume-name` is sent once they do. |
-| `CreateVolume` | `create_storage`: size rounded up to whole GiB (at least 1, at most 4096), `tier` from the StorageClass (left out when the class names none, so the API uses the zone's `default_storage_tier`), zone from `topology.ankra.cloud/zone`. A new `local-nvme` (or zone-default) volume sends `placement.server_id` = the scheduled node's server, so the storage lands on the compute node that runs it. A snapshot source sends `source_snapshot_id`, a volume source `source_storage_id`. A storage left in `error` is deleted and created again. |
+| `CreateVolume` | `create_storage`: size rounded up to whole GiB (at least 1, at most 4096), `tier` from the StorageClass (left out when the class names none, so the API uses the zone's `default_storage_tier`), zone from `topology.ankra.cloud/zone`. A new `local-nvme` (or zone-default) volume sends `placement.server_id` = the scheduled node's server, so the storage lands on the compute node that runs it. A snapshot source sends `source_snapshot_id`, a volume source `source_storage_id`. A storage is created only by a call that finds none of the name. A storage that failed to provision (`error`) is deleted and the call answers `INTERNAL` once it is gone, so the next call creates it again; a storage that is still being deleted is waited for. While a storage of the name exists that the call can neither return nor confirm deleted, and when the API could not be asked, the answer is `DEADLINE_EXCEEDED`, `ABORTED` or `UNAVAILABLE`: external-provisioner then keeps calling, also for a claim that is gone, so no storage is left behind. |
 | `GetCapacity` | `get_server_storage_capacity` (`GET /v1/servers/{id}/storage-capacity`) for the server in the node's `topology.ankra.cloud/node` segment. A tier the API limits per node (`local-nvme`: the room left in the Ankra Local pool of the server's compute node, by the rule `create_storage` refuses with 409) reports that room as the available capacity and the largest volume `create_storage` takes there as the maximum volume size. Other tiers, a tier the zone refuses everywhere and a server the API does not know report 4096 GiB. A class without a tier reads the zone's default tier. One read answers a node's classes for `capacity.cacheTTL`. |
-| `DeleteVolume` | `delete_storage`; a missing storage is success, an attached one is `FAILED_PRECONDITION`. |
+| `DeleteVolume` | `delete_storage`, then waits until the storage is gone; a missing storage is success, a storage that is already being deleted is waited for, an attached one is `FAILED_PRECONDITION`. |
 | `ControllerPublishVolume` | `attach_storage` to the node's server (hot-plug), waits for the operation. Returns the device serial in the publish context. |
 | `ControllerUnpublishVolume` | `detach_storage` (hot-unplug); a missing or elsewhere-attached storage is success. |
 | `ControllerExpandVolume` | `resize_storage` while attached (online); `node_expansion_required` for file system volumes. |
@@ -161,8 +161,9 @@ The binary reads these environment variables, which the chart sets:
 Only single-node writer (ReadWriteOnce) is supported, in `Filesystem` and `Block` volume mode.
 
 API errors become gRPC codes: 400 `INVALID_ARGUMENT`, 401 `UNAUTHENTICATED`, 403 `PERMISSION_DENIED`, 404
-`NOT_FOUND`, 409 `FAILED_PRECONDITION`, 422 (quota, no free device slot) `RESOURCE_EXHAUSTED`, 429 and 502-504
-`UNAVAILABLE`, a failed operation `INTERNAL`. Two calls for the same volume at once answer `ABORTED`.
+`NOT_FOUND`, 409 `FAILED_PRECONDITION`, 422 (quota, no free device slot) `RESOURCE_EXHAUSTED`, 429, 500, 502-504 and
+a call that got no answer `UNAVAILABLE`, a failed operation `INTERNAL`. Two calls for the same volume at once answer
+`ABORTED`.
 
 ### Topology and WaitForFirstConsumer
 

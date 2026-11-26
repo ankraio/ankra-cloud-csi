@@ -2,9 +2,12 @@ package driver
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
@@ -48,6 +51,9 @@ func (driver *Driver) wait(ctx context.Context, operation cloud.Operation) error
 
 // CreateVolume finds the storage named after the volume or creates it. The volume name is the storage title: storages
 // have no labels yet, so the title is the idempotency key (VolumeNameLabel is sent once they do).
+//
+// A storage is created only by a call that found no storage of the name at all. Once one exists, the call answers with
+// a code that ends provisioning only after it confirmed that none is left; pendingStatus says why.
 func (driver *Driver) CreateVolume(ctx context.Context, request *csi.CreateVolumeRequest) (*csi.CreateVolumeResponse, error) {
 	name := request.GetName()
 	if name == "" {
@@ -74,6 +80,24 @@ func (driver *Driver) CreateVolume(ctx context.Context, request *csi.CreateVolum
 	ctx, cancel := driver.operationContext(ctx)
 	defer cancel()
 
+	existing, settleError := driver.settleVolumesByName(ctx, name)
+	if settleError != nil {
+		return nil, settleError
+	}
+	if existing != nil {
+		if !fitsCapacityRange(existing.SizeGibibytes, request.GetCapacityRange()) {
+			return nil, status.Errorf(codes.AlreadyExists, "volume %s exists with %d GiB, outside the requested range", name, existing.SizeGibibytes)
+		}
+		if tier != "" && existing.Tier != tier {
+			return nil, status.Errorf(codes.AlreadyExists, "volume %s exists on tier %s, not %s", name, existing.Tier, tier)
+		}
+		ready, waitError := driver.waitForVolume(ctx, name, *existing)
+		if waitError != nil {
+			return nil, waitError
+		}
+		return &csi.CreateVolumeResponse{Volume: driver.csiVolume(ready, nodeFromTopology(request.GetAccessibilityRequirements(), ready.Zone), request)}, nil
+	}
+
 	source, sourceError := driver.resolveSource(ctx, request.GetVolumeContentSource())
 	if sourceError != nil {
 		return nil, sourceError
@@ -84,36 +108,6 @@ func (driver *Driver) CreateVolume(ctx context.Context, request *csi.CreateVolum
 		}
 		sizeGibibytes = source.sizeGibibytes
 	}
-
-	existing, findError := driver.findVolumeByName(ctx, name)
-	if findError != nil {
-		return nil, apiStatus(findError, "look up volume %s", name)
-	}
-	if existing != nil && existing.State == cloud.StorageStateError {
-		driver.logger.Warn("replacing a volume that failed to provision", "volume", existing.ID, "name", name)
-		operation, deleteError := driver.options.API.DeleteVolume(ctx, existing.ID)
-		if deleteError != nil && !cloud.IsNotFound(deleteError) {
-			return nil, apiStatus(deleteError, "delete the failed volume %s", existing.ID)
-		}
-		if waitError := driver.wait(ctx, operation); waitError != nil {
-			return nil, apiStatus(waitError, "delete the failed volume %s", existing.ID)
-		}
-		existing = nil
-	}
-	if existing != nil {
-		if !fitsCapacityRange(existing.SizeGibibytes, request.GetCapacityRange()) {
-			return nil, status.Errorf(codes.AlreadyExists, "volume %s exists with %d GiB, outside the requested range", name, existing.SizeGibibytes)
-		}
-		if tier != "" && existing.Tier != tier {
-			return nil, status.Errorf(codes.AlreadyExists, "volume %s exists on tier %s, not %s", name, existing.Tier, tier)
-		}
-		ready, waitError := driver.waitForVolume(ctx, *existing)
-		if waitError != nil {
-			return nil, waitError
-		}
-		return &csi.CreateVolumeResponse{Volume: driver.csiVolume(ready, nodeFromTopology(request.GetAccessibilityRequirements(), ready.Zone), request)}, nil
-	}
-
 	zone, zoneError := driver.chooseZone(request.GetAccessibilityRequirements(), source.zone)
 	if zoneError != nil {
 		return nil, zoneError
@@ -138,11 +132,14 @@ func (driver *Driver) CreateVolume(ctx context.Context, request *csi.CreateVolum
 		return nil, apiStatus(createError, "create volume %s", name)
 	}
 	if waitError := driver.wait(ctx, operation); waitError != nil {
-		return nil, apiStatus(waitError, "create volume %s (%s)", name, created.ID)
+		if errors.Is(waitError, cloud.ErrOperationFailed) {
+			return nil, driver.discardFailedVolume(ctx, name, created, waitError)
+		}
+		return nil, pendingStatus(ctx, waitError, "create volume %s (%s)", name, created.ID)
 	}
 	ready, getError := driver.options.API.GetVolume(ctx, created.ID)
 	if getError != nil {
-		return nil, apiStatus(getError, "read volume %s", created.ID)
+		return nil, pendingStatus(ctx, getError, "read volume %s", created.ID)
 	}
 	return &csi.CreateVolumeResponse{Volume: driver.csiVolume(ready, node, request)}, nil
 }
@@ -190,25 +187,187 @@ func (driver *Driver) resolveSource(ctx context.Context, contentSource *csi.Volu
 	return volumeSource{}, status.Error(codes.InvalidArgument, "unsupported volume content source")
 }
 
-func (driver *Driver) findVolumeByName(ctx context.Context, name string) (*cloud.Volume, error) {
+// volumesByName returns every storage titled name that the API has not deleted. One that is `error` or `deleting`
+// still holds the name: it is a storage an earlier call for the volume left, and stays one until it is gone.
+func (driver *Driver) volumesByName(ctx context.Context, name string) ([]cloud.Volume, error) {
 	volumes, listError := driver.options.API.ListVolumes(ctx)
 	if listError != nil {
 		return nil, listError
 	}
-	for index := range volumes {
-		volume := volumes[index]
-		if volume.Title == name && volume.State != cloud.StorageStateDeleting && volume.State != cloud.StorageStateDeleted {
-			return &volume, nil
+	var named []cloud.Volume
+	for _, volume := range volumes {
+		if volume.Title == name && volume.State != cloud.StorageStateDeleted {
+			named = append(named, volume)
 		}
 	}
-	return nil, nil
+	return named, nil
 }
 
-// waitForVolume waits for a storage another call started to finish provisioning.
-func (driver *Driver) waitForVolume(ctx context.Context, volume cloud.Volume) (cloud.Volume, error) {
+// settleVolumesByName accounts for every storage that carries the volume's name before CreateVolume goes on, and
+// returns the one that is the volume, nil when none is left.
+//
+// A storage in `error` failed to provision and is deleted. One in `deleting` is waited for, and deleted once more when
+// its delete failed and the API put it back to `error`: creating beside it made a second storage of the same name,
+// and nothing ever looked at the first again. A storage in any other state is the volume. Of several, the oldest is:
+// the others are left alone and named in a warning.
+//
+// With no storage found, a new one may be created. With storages found and none of them left, the answer is Internal
+// instead: a call that had storages to clear away creates nothing, so a claim that is gone, which external-provisioner
+// stops asking about after that answer, never gets a new volume made for it. A claim that is still there is asked
+// about again, and that call creates the storage. A list that fails proves nothing about what exists, so it never
+// ends provisioning.
+func (driver *Driver) settleVolumesByName(ctx context.Context, name string) (*cloud.Volume, error) {
+	named, listError := driver.volumesByName(ctx, name)
+	if listError != nil {
+		return nil, pendingStatus(ctx, listError, "look up volume %s", name)
+	}
+	var alive []cloud.Volume
+	var removed []string
+	for _, volume := range named {
+		if volume.State == cloud.StorageStateDeleting {
+			remaining, isGone, waitError := driver.waitWhileDeleting(ctx, volume)
+			if waitError != nil {
+				return nil, pendingStatus(ctx, waitError, "volume %s: storage %s is still being deleted", name, volume.ID)
+			}
+			if isGone {
+				removed = append(removed, volume.ID)
+				continue
+			}
+			volume = remaining
+		}
+		if volume.State != cloud.StorageStateError {
+			alive = append(alive, volume)
+			continue
+		}
+		if removeError := driver.removeFailedVolume(ctx, name, volume); removeError != nil {
+			return nil, removeError
+		}
+		removed = append(removed, volume.ID)
+	}
+	if len(alive) == 0 {
+		if len(removed) > 0 {
+			return nil, status.Errorf(codes.Internal, "volume %s was not provisioned: storage %s of an earlier attempt is deleted",
+				name, strings.Join(removed, ", "))
+		}
+		return nil, nil
+	}
+	sort.Slice(alive, func(first, second int) bool {
+		if !alive[first].CreatedAt.Equal(alive[second].CreatedAt) {
+			return alive[first].CreatedAt.Before(alive[second].CreatedAt)
+		}
+		return alive[first].ID < alive[second].ID
+	})
+	if len(alive) > 1 {
+		others := make([]string, 0, len(alive)-1)
+		for _, other := range alive[1:] {
+			others = append(others, other.ID)
+		}
+		driver.logger.Warn("several storages carry the volume's name; using the oldest and leaving the others alone",
+			"name", name, "volume", alive[0].ID, "others", others)
+	}
+	return &alive[0], nil
+}
+
+// removeFailedVolume deletes a storage that failed to provision and returns nil once the API no longer has it. Until
+// then the storage is still there, so the error is one that makes external-provisioner call again (pendingStatus).
+func (driver *Driver) removeFailedVolume(ctx context.Context, name string, failed cloud.Volume) error {
+	driver.logger.Warn("deleting a storage that failed to provision", "volume", failed.ID, "name", name)
+	if deleteError := driver.deleteVolumeAndWait(ctx, failed); deleteError != nil {
+		return pendingStatus(ctx, deleteError, "delete storage %s, which failed to provision volume %s", failed.ID, name)
+	}
+	return nil
+}
+
+// discardFailedVolume deletes a storage that failed to provision and always returns an error: Internal, which ends
+// provisioning, once the storage is gone, and before that whatever removeFailedVolume answers. It creates no
+// replacement: external-provisioner calls again for a claim that is still there, and that call creates one.
+func (driver *Driver) discardFailedVolume(ctx context.Context, name string, failed cloud.Volume, cause error) error {
+	if removeError := driver.removeFailedVolume(ctx, name, failed); removeError != nil {
+		return removeError
+	}
+	if cause != nil {
+		return status.Errorf(codes.Internal, "volume %s failed to provision as storage %s, which is deleted: %v", name, failed.ID, cause)
+	}
+	return status.Errorf(codes.Internal, "volume %s failed to provision as storage %s, which is deleted", name, failed.ID)
+}
+
+// deleteVolumeAndWait asks the API to delete a storage and returns nil once the API no longer has it.
+//
+// A storage the API is already deleting is waited for, not deleted again: the API refuses a second delete with 409,
+// which made every retry of a DeleteVolume whose first call had timed out fail. A 409 for a storage that turns out to
+// be `deleting` is that same refusal, told by the storage's state and not by the wording of the answer. Any other
+// conflict is returned as it is.
+//
+// The API marks a storage `deleting` in the first step of the delete operation, not when it accepts the request, so
+// the operation is waited for before the storage is read again.
+func (driver *Driver) deleteVolumeAndWait(ctx context.Context, volume cloud.Volume) error {
+	if volume.State != cloud.StorageStateDeleting && volume.State != cloud.StorageStateDeleted {
+		operation, deleteError := driver.options.API.DeleteVolume(ctx, volume.ID)
+		if cloud.IsNotFound(deleteError) {
+			return nil
+		}
+		isRefused := cloud.StatusCode(deleteError) == http.StatusConflict
+		if deleteError != nil && !isRefused {
+			return deleteError
+		}
+		if !isRefused {
+			if waitError := driver.wait(ctx, operation); waitError != nil {
+				return waitError
+			}
+		}
+		current, getError := driver.options.API.GetVolume(ctx, volume.ID)
+		if cloud.IsNotFound(getError) {
+			return nil
+		}
+		if getError != nil {
+			return fmt.Errorf("read volume %s: %w", volume.ID, getError)
+		}
+		if isRefused && current.State != cloud.StorageStateDeleting && current.State != cloud.StorageStateDeleted {
+			return deleteError
+		}
+		volume = current
+	}
+	remaining, isGone, waitError := driver.waitWhileDeleting(ctx, volume)
+	if waitError != nil {
+		return waitError
+	}
+	if !isGone {
+		return fmt.Errorf("%w: volume %s is %s", errVolumeRemains, remaining.ID, remaining.State)
+	}
+	return nil
+}
+
+// waitWhileDeleting polls a storage the API is deleting until it is gone. It returns the storage as last read and
+// false when the storage left `deleting` for another state: the API puts a storage whose delete failed back to
+// `error`.
+func (driver *Driver) waitWhileDeleting(ctx context.Context, volume cloud.Volume) (cloud.Volume, bool, error) {
+	for volume.State == cloud.StorageStateDeleting {
+		timer := time.NewTimer(driver.options.OperationPollInterval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return volume, false, ctx.Err()
+		case <-timer.C:
+		}
+		refreshed, getError := driver.options.API.GetVolume(ctx, volume.ID)
+		if cloud.IsNotFound(getError) {
+			return volume, true, nil
+		}
+		if getError != nil {
+			return volume, false, fmt.Errorf("read volume %s: %w", volume.ID, getError)
+		}
+		volume = refreshed
+	}
+	return volume, volume.State == cloud.StorageStateDeleted, nil
+}
+
+// waitForVolume waits for a storage another call started to finish provisioning. One that ends in `error` is deleted
+// (discardFailedVolume), and a read that fails says nothing about the storage, which is still there, so neither ends
+// provisioning while it is.
+func (driver *Driver) waitForVolume(ctx context.Context, name string, volume cloud.Volume) (cloud.Volume, error) {
 	for volume.State != cloud.StorageStateOnline {
 		if volume.State == cloud.StorageStateError {
-			return volume, status.Errorf(codes.Internal, "volume %s failed to provision", volume.ID)
+			return volume, driver.discardFailedVolume(ctx, name, volume, nil)
 		}
 		timer := time.NewTimer(driver.options.OperationPollInterval)
 		select {
@@ -219,7 +378,7 @@ func (driver *Driver) waitForVolume(ctx context.Context, volume cloud.Volume) (c
 		}
 		refreshed, getError := driver.options.API.GetVolume(ctx, volume.ID)
 		if getError != nil {
-			return volume, apiStatus(getError, "read volume %s", volume.ID)
+			return volume, pendingStatus(ctx, getError, "read volume %s", volume.ID)
 		}
 		volume = refreshed
 	}
@@ -283,7 +442,8 @@ func (driver *Driver) csiVolume(volume cloud.Volume, node string, request *csi.C
 	}
 }
 
-// DeleteVolume deletes the storage; a storage that is already gone is success.
+// DeleteVolume deletes the storage; a storage that is already gone is success, and one that is already being deleted
+// is waited for (deleteVolumeAndWait).
 func (driver *Driver) DeleteVolume(ctx context.Context, request *csi.DeleteVolumeRequest) (*csi.DeleteVolumeResponse, error) {
 	volumeID := request.GetVolumeId()
 	if volumeID == "" {
@@ -307,15 +467,8 @@ func (driver *Driver) DeleteVolume(ctx context.Context, request *csi.DeleteVolum
 	if volume.ServerID != "" {
 		return nil, status.Errorf(codes.FailedPrecondition, "volume %s is still attached to server %s", volumeID, volume.ServerID)
 	}
-	operation, deleteError := driver.options.API.DeleteVolume(ctx, volumeID)
-	if cloud.IsNotFound(deleteError) {
-		return &csi.DeleteVolumeResponse{}, nil
-	}
-	if deleteError != nil {
+	if deleteError := driver.deleteVolumeAndWait(ctx, volume); deleteError != nil {
 		return nil, apiStatus(deleteError, "delete volume %s", volumeID)
-	}
-	if waitError := driver.wait(ctx, operation); waitError != nil {
-		return nil, apiStatus(waitError, "delete volume %s", volumeID)
 	}
 	return &csi.DeleteVolumeResponse{}, nil
 }

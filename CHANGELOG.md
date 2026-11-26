@@ -14,6 +14,27 @@ All notable changes to this project are documented here. The format follows
   zone gets the same account key, revoking leaves the key in place, and a bucket is deleted only when it is empty.
   `deploy/cosi-controller` installs the COSI CRDs and controller with the release image pinned by digest.
 
+### Fixed
+
+- `CreateVolume` leaves no storage behind when provisioning fails. external-provisioner stops asking about a claim
+  that was deleted once `CreateVolume` answers a code other than `CANCELLED`, `DEADLINE_EXCEEDED`, `UNAVAILABLE` or
+  `ABORTED`, and no PersistentVolume exists yet, so `DeleteVolume` is never called: a storage that still exists at
+  that moment is never deleted and keeps its room in the pool. The driver answered such a code (`INTERNAL`) with a
+  storage in place when the create operation failed, when a storage it was waiting for turned to `error`, and when a
+  call to the API got no answer or a 500 while the create went on. After volume creates hung on one host, storages
+  left this way held the pool's room until new claims waited for it. Now a storage that failed to provision is
+  deleted, and the answer is `INTERNAL` only once it is gone; until then, and whenever the API could not be asked,
+  the answer is `DEADLINE_EXCEEDED`, `ABORTED` or `UNAVAILABLE`, so external-provisioner keeps calling.
+- A storage is created only by a call that finds none of the volume's name. A retry no longer creates a second
+  storage beside one that is still being deleted, and a storage whose delete failed is deleted again by the next
+  call. The call that cleared a failed storage away creates no replacement: the next call does, for a claim that is
+  still there.
+- `DeleteVolume` waits for a storage that is already being deleted. The API refuses a second delete with 409, which
+  the driver answered as `FAILED_PRECONDITION` on every retry of a `DeleteVolume` whose first call had timed out.
+- An API error without an HTTP status (a call that got no answer) and a 500 are answered `UNAVAILABLE`, not
+  `INTERNAL`, by every controller call: the API may have carried the request out, and the sidecars take `INTERNAL` to
+  mean that nothing is in progress.
+
 ## v0.3.1
 
 ### Fixed
