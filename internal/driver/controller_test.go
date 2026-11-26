@@ -2,8 +2,11 @@ package driver
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc/codes"
@@ -89,17 +92,25 @@ func TestCreateVolumeIsIdempotentByName(t *testing.T) {
 	expectCode(t, tierError, codes.AlreadyExists)
 }
 
-func TestCreateVolumeReplacesAStorageThatFailedToProvision(t *testing.T) {
+// A call that finds a storage in `error` deletes it and creates nothing: Internal ends provisioning for a claim that is
+// gone, and a claim that is still there is asked about again, which is the call that creates its storage.
+func TestCreateVolumeDeletesAStorageThatFailedToProvisionAndCreatesItsReplacementOnlyInALaterCall(t *testing.T) {
 	api := cloudfake.New()
-	api.AddVolume(cloud.Volume{ID: "5a000000-0000-4000-8000-000000000001", Zone: testZone, Title: "pvc-broken", Tier: cloudfake.DefaultStorageTier,
-		State: cloud.StorageStateError, SizeGibibytes: 1})
+	failed := storageNamed("pvc-broken", 1, cloud.StorageStateError)
+	api.AddVolume(failed)
 	csiDriver := newTestDriver(t, api, newFakeHost())
+	_, cleanupError := csiDriver.CreateVolume(context.Background(), createRequest("pvc-broken", gibibyte, nil))
+	expectCode(t, cleanupError, codes.Internal)
+	expectStorages(t, api, "pvc-broken", 0)
+	if api.Calls("CreateVolume") != 0 {
+		t.Fatalf("the call that deleted the failed storage created %d storages", api.Calls("CreateVolume"))
+	}
 	response, createError := csiDriver.CreateVolume(context.Background(), createRequest("pvc-broken", gibibyte, nil))
 	if createError != nil {
 		t.Fatalf("CreateVolume: %v", createError)
 	}
-	if response.GetVolume().GetVolumeId() == "5a000000-0000-4000-8000-000000000001" || api.VolumeCount() != 1 {
-		t.Fatalf("the failed storage was not replaced: %s", response.GetVolume().GetVolumeId())
+	if created := expectStorages(t, api, "pvc-broken", 1); created[0].ID == failed.ID || created[0].ID != response.GetVolume().GetVolumeId() {
+		t.Fatalf("the later call returned %s, the storages are %+v", response.GetVolume().GetVolumeId(), created)
 	}
 }
 
@@ -264,7 +275,7 @@ func TestCreateVolumeMapsAPIErrors(t *testing.T) {
 		{http.StatusUnauthorized, codes.Unauthenticated},
 		{http.StatusForbidden, codes.PermissionDenied},
 		{http.StatusServiceUnavailable, codes.Unavailable},
-		{http.StatusInternalServerError, codes.Internal},
+		{http.StatusInternalServerError, codes.Unavailable},
 	} {
 		api := cloudfake.New()
 		api.FailWith("CreateVolume", testCase.statusCode)
@@ -272,6 +283,11 @@ func TestCreateVolumeMapsAPIErrors(t *testing.T) {
 		_, createError := csiDriver.CreateVolume(context.Background(), createRequest("pvc-error", gibibyte, nil))
 		expectCode(t, createError, testCase.code)
 	}
+	api := cloudfake.New()
+	api.FailWithError("CreateVolume", errNoAnswer)
+	csiDriver := newTestDriver(t, api, newFakeHost())
+	_, createError := csiDriver.CreateVolume(context.Background(), createRequest("pvc-error", gibibyte, nil))
+	expectCode(t, createError, codes.Unavailable)
 }
 
 func TestCreateVolumeRejectsBadRequests(t *testing.T) {
@@ -290,24 +306,253 @@ func TestCreateVolumeRejectsBadRequests(t *testing.T) {
 	expectCode(t, hugeError, codes.OutOfRange)
 }
 
-func TestCreateVolumeReportsAFailedOperation(t *testing.T) {
-	api := &failingOperationAPI{API: cloudfake.New()}
-	csiDriver := newTestDriver(t, api.API, newFakeHost())
-	csiDriver.options.API = api
+// errNoAnswer is what a call that got no answer from the API returns: an error without an HTTP status.
+var errNoAnswer = errors.New("read tcp 192.0.2.10:443: connection reset by peer")
+
+// heldCallTimeout is the deadline of a call that is to run into an operation the fake never finishes. Such a call polls
+// twice at most before it gets there, so the deadline is this long only to hold on a busy machine.
+const heldCallTimeout = 250 * time.Millisecond
+
+func heldCall(t *testing.T) context.Context {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), heldCallTimeout)
+	t.Cleanup(cancel)
+	return ctx
+}
+
+func storageNamed(name string, sequence int, state string) cloud.Volume {
+	return cloud.Volume{ID: fmt.Sprintf("5a000000-0000-4000-8000-%012d", sequence), Zone: testZone, Title: name,
+		Tier: cloudfake.DefaultStorageTier, State: state, SizeGibibytes: 1}
+}
+
+// expectStorages fails unless exactly count storages carry the volume's name, and returns them.
+func expectStorages(t *testing.T, api *cloudfake.API, name string, count int) []cloud.Volume {
+	t.Helper()
+	volumes, listError := api.ListVolumes(context.Background())
+	if listError != nil {
+		t.Fatalf("ListVolumes: %v", listError)
+	}
+	var named []cloud.Volume
+	for _, volume := range volumes {
+		if volume.Title == name {
+			named = append(named, volume)
+		}
+	}
+	if len(named) != count {
+		t.Fatalf("%d storages are named %s, want %d: %+v", len(named), name, count, named)
+	}
+	return named
+}
+
+// A create whose operation fails leaves its storage in `error`, and no PersistentVolume was made for it, so nothing
+// but this call ever deletes it.
+func TestACreateWhoseOperationFailsLeavesNoStorageBehindAndIsInternalOnlyOnceTheStorageIsGone(t *testing.T) {
+	api := cloudfake.New()
+	csiDriver := newTestDriver(t, api, newFakeHost())
+	api.SettleCreates(2, cloud.StorageStateError)
+	api.SettleDeletes(3, cloud.StorageStateDeleted)
 	_, createError := csiDriver.CreateVolume(context.Background(), createRequest("pvc-failing", gibibyte, nil))
 	expectCode(t, createError, codes.Internal)
+	expectStorages(t, api, "pvc-failing", 0)
+	if api.Calls("CreateVolume") != 1 || api.Calls("DeleteVolume") != 1 {
+		t.Fatalf("%d creates and %d deletes, want one of each", api.Calls("CreateVolume"), api.Calls("DeleteVolume"))
+	}
+
+	api.SettleCreates(0, cloud.StorageStateError)
+	api.SettleDeletes(cloudfake.Never, cloud.StorageStateDeleted)
+	_, heldError := csiDriver.CreateVolume(heldCall(t), createRequest("pvc-failing-slowly", gibibyte, nil))
+	expectCode(t, heldError, codes.DeadlineExceeded)
+	if left := expectStorages(t, api, "pvc-failing-slowly", 1); left[0].State != cloud.StorageStateDeleting {
+		t.Fatalf("the failed storage is %s, want it being deleted", left[0].State)
+	}
 }
 
-// failingOperationAPI hands out create operations that are still running and then fail.
-type failingOperationAPI struct {
-	*cloudfake.API
+func TestAStorageThatTurnsToErrorWhileARetryWaitsForItIsDeletedAndTheCallIsNotFinalUntilItIsGone(t *testing.T) {
+	api := cloudfake.New()
+	csiDriver := newTestDriver(t, api, newFakeHost())
+	turning := storageNamed("pvc-turning", 1, cloud.StorageStateCreating)
+	api.AddVolume(turning)
+	api.SettleVolume(turning.ID, 3, cloud.StorageStateError)
+	_, turnedError := csiDriver.CreateVolume(context.Background(), createRequest("pvc-turning", gibibyte, nil))
+	expectCode(t, turnedError, codes.Internal)
+	expectStorages(t, api, "pvc-turning", 0)
+
+	held := storageNamed("pvc-turning-slowly", 2, cloud.StorageStateCreating)
+	api.AddVolume(held)
+	api.SettleVolume(held.ID, 1, cloud.StorageStateError)
+	api.SettleDeletes(cloudfake.Never, cloud.StorageStateDeleted)
+	_, heldError := csiDriver.CreateVolume(heldCall(t), createRequest("pvc-turning-slowly", gibibyte, nil))
+	expectCode(t, heldError, codes.DeadlineExceeded)
+	if left := expectStorages(t, api, "pvc-turning-slowly", 1); left[0].State != cloud.StorageStateDeleting {
+		t.Fatalf("the failed storage is %s, want it being deleted", left[0].State)
+	}
+	api.SettleVolume(held.ID, 2, cloud.StorageStateDeleted)
+	_, goneError := csiDriver.CreateVolume(context.Background(), createRequest("pvc-turning-slowly", gibibyte, nil))
+	expectCode(t, goneError, codes.Internal)
+	expectStorages(t, api, "pvc-turning-slowly", 0)
+	if api.Calls("CreateVolume") != 0 || api.Calls("DeleteVolume") != 2 {
+		t.Fatalf("%d creates and %d deletes, want none and one for each storage", api.Calls("CreateVolume"), api.Calls("DeleteVolume"))
+	}
 }
 
-func (api *failingOperationAPI) CreateVolume(ctx context.Context, request cloud.CreateVolumeRequest) (cloud.Volume, cloud.Operation, error) {
-	volume, _, createError := api.API.CreateVolume(ctx, request)
-	running := cloud.Operation{ID: "0e-running", Status: cloud.OperationStatusRunning}
-	api.SetOperation(cloud.Operation{ID: running.ID, Status: cloud.OperationStatusFailed, Step: "create_disk", Error: "no space"})
-	return volume, running, createError
+// The driver looked past a storage that was `deleting` and created another of the same name beside it.
+func TestARetryWhileTheFailedStorageIsStillBeingDeletedCreatesNoSecondStorage(t *testing.T) {
+	api := cloudfake.New()
+	csiDriver := newTestDriver(t, api, newFakeHost())
+	failed := storageNamed("pvc-retried", 1, cloud.StorageStateError)
+	api.AddVolume(failed)
+	api.SettleDeletes(cloudfake.Never, cloud.StorageStateDeleted)
+	for attempt := 1; attempt <= 2; attempt++ {
+		_, heldError := csiDriver.CreateVolume(heldCall(t), createRequest("pvc-retried", gibibyte, nil))
+		expectCode(t, heldError, codes.DeadlineExceeded)
+		if left := expectStorages(t, api, "pvc-retried", 1); left[0].ID != failed.ID || left[0].State != cloud.StorageStateDeleting {
+			t.Fatalf("attempt %d left %+v, want only the failed storage, being deleted", attempt, left)
+		}
+	}
+	if api.Calls("CreateVolume") != 0 || api.Calls("DeleteVolume") != 1 {
+		t.Fatalf("%d creates and %d deletes, want no create and one delete", api.Calls("CreateVolume"), api.Calls("DeleteVolume"))
+	}
+
+	api.SettleVolume(failed.ID, 2, cloud.StorageStateDeleted)
+	_, goneError := csiDriver.CreateVolume(context.Background(), createRequest("pvc-retried", gibibyte, nil))
+	expectCode(t, goneError, codes.Internal)
+	expectStorages(t, api, "pvc-retried", 0)
+	if api.Calls("CreateVolume") != 0 {
+		t.Fatalf("the call that saw the failed storage go created %d storages", api.Calls("CreateVolume"))
+	}
+	api.SettleDeletes(0, "")
+	response, createError := csiDriver.CreateVolume(context.Background(), createRequest("pvc-retried", gibibyte, nil))
+	if createError != nil {
+		t.Fatalf("CreateVolume once nothing is left: %v", createError)
+	}
+	if created := expectStorages(t, api, "pvc-retried", 1); created[0].ID != response.GetVolume().GetVolumeId() {
+		t.Fatalf("returned %s, the storage is %s", response.GetVolume().GetVolumeId(), created[0].ID)
+	}
+}
+
+// The API puts a storage whose delete failed back to `error`. Nothing looked at it again.
+func TestADeleteThatFallsBackToErrorIsCleanedUpByTheNextCreateVolume(t *testing.T) {
+	api := cloudfake.New()
+	csiDriver := newTestDriver(t, api, newFakeHost())
+	failed := storageNamed("pvc-fallback", 1, cloud.StorageStateError)
+	api.AddVolume(failed)
+	api.SettleDeletes(2, cloud.StorageStateError)
+	_, fallbackError := csiDriver.CreateVolume(context.Background(), createRequest("pvc-fallback", gibibyte, nil))
+	expectCode(t, fallbackError, codes.Aborted)
+	if left := expectStorages(t, api, "pvc-fallback", 1); left[0].ID != failed.ID || left[0].State != cloud.StorageStateError {
+		t.Fatalf("the failed delete left %+v, want the storage back in error", left)
+	}
+	api.SettleDeletes(2, cloud.StorageStateDeleted)
+	_, cleanedError := csiDriver.CreateVolume(context.Background(), createRequest("pvc-fallback", gibibyte, nil))
+	expectCode(t, cleanedError, codes.Internal)
+	expectStorages(t, api, "pvc-fallback", 0)
+
+	late := storageNamed("pvc-fallback-late", 2, cloud.StorageStateError)
+	api.AddVolume(late)
+	api.SettleDeletes(cloudfake.Never, cloud.StorageStateDeleted)
+	_, heldError := csiDriver.CreateVolume(heldCall(t), createRequest("pvc-fallback-late", gibibyte, nil))
+	expectCode(t, heldError, codes.DeadlineExceeded)
+	expectStorages(t, api, "pvc-fallback-late", 1)
+	api.SettleVolume(late.ID, 2, cloud.StorageStateError)
+	api.SettleDeletes(1, cloud.StorageStateDeleted)
+	_, lateError := csiDriver.CreateVolume(context.Background(), createRequest("pvc-fallback-late", gibibyte, nil))
+	expectCode(t, lateError, codes.Internal)
+	expectStorages(t, api, "pvc-fallback-late", 0)
+	if api.Calls("CreateVolume") != 0 || api.Calls("DeleteVolume") != 4 {
+		t.Fatalf("%d creates and %d deletes, want no create and two deletes for each storage", api.Calls("CreateVolume"), api.Calls("DeleteVolume"))
+	}
+}
+
+// A read that fails says nothing about the storage: the create goes on in the API, and the storage comes online with
+// nobody left to own it if the answer ends provisioning.
+func TestAnAPIReadThatFailsDoesNotEndProvisioningAndALaterCallAdoptsTheStorage(t *testing.T) {
+	failures := []struct {
+		name string
+		fail func(api *cloudfake.API, method string)
+	}{
+		{"gets no answer", func(api *cloudfake.API, method string) { api.FailWithError(method, errNoAnswer) }},
+		{"is answered 500", func(api *cloudfake.API, method string) { api.FailWith(method, http.StatusInternalServerError) }},
+	}
+	for _, method := range []string{"ListVolumes", "GetVolume", "GetOperation"} {
+		for _, failure := range failures {
+			t.Run(method+" "+failure.name, func(t *testing.T) {
+				api := cloudfake.New()
+				csiDriver := newTestDriver(t, api, newFakeHost())
+				creates := 0
+				if method == "GetOperation" {
+					api.SettleCreates(cloudfake.Never, cloud.StorageStateOnline)
+					creates = 1
+				} else {
+					api.AddVolume(storageNamed("pvc-unread", 1, cloud.StorageStateCreating))
+				}
+				failure.fail(api, method)
+				_, failedError := csiDriver.CreateVolume(context.Background(), createRequest("pvc-unread", gibibyte, nil))
+				expectCode(t, failedError, codes.Unavailable)
+				api.FailWith(method, 0)
+				pending := expectStorages(t, api, "pvc-unread", 1)[0]
+
+				api.SettleVolume(pending.ID, 0, cloud.StorageStateOnline)
+				response, adoptError := csiDriver.CreateVolume(context.Background(), createRequest("pvc-unread", gibibyte, nil))
+				if adoptError != nil {
+					t.Fatalf("CreateVolume once the storage is online: %v", adoptError)
+				}
+				expectStorages(t, api, "pvc-unread", 1)
+				if response.GetVolume().GetVolumeId() != pending.ID || api.Calls("CreateVolume") != creates {
+					t.Fatalf("returned %s after %d creates, want the storage %s after %d", response.GetVolume().GetVolumeId(),
+						api.Calls("CreateVolume"), pending.ID, creates)
+				}
+			})
+		}
+	}
+}
+
+func TestCreateVolumeUsesTheOldestOfSeveralStoragesAndDeletesAFailedOne(t *testing.T) {
+	api := cloudfake.New()
+	csiDriver := newTestDriver(t, api, newFakeHost())
+	createdAt := time.Date(2026, 9, 1, 9, 0, 0, 0, time.UTC)
+	newer := storageNamed("pvc-twins", 1, cloud.StorageStateOnline)
+	newer.CreatedAt = createdAt.Add(time.Hour)
+	older := storageNamed("pvc-twins", 2, cloud.StorageStateOnline)
+	older.CreatedAt = createdAt
+	failed := storageNamed("pvc-twins", 3, cloud.StorageStateError)
+	for _, volume := range []cloud.Volume{newer, older, failed} {
+		api.AddVolume(volume)
+	}
+	response, createError := csiDriver.CreateVolume(context.Background(), createRequest("pvc-twins", gibibyte, nil))
+	if createError != nil {
+		t.Fatalf("CreateVolume: %v", createError)
+	}
+	if response.GetVolume().GetVolumeId() != older.ID {
+		t.Fatalf("returned %s, want the oldest storage %s", response.GetVolume().GetVolumeId(), older.ID)
+	}
+	for _, left := range expectStorages(t, api, "pvc-twins", 2) {
+		if left.ID == failed.ID {
+			t.Fatalf("the failed storage %s was left beside the volume", failed.ID)
+		}
+	}
+}
+
+// The source was read before the lookup, so a retry whose source had gone answered NotFound, which ends provisioning
+// with the storage of the first call left.
+func TestARetryReturnsItsStorageAlthoughItsSourceIsGone(t *testing.T) {
+	api := cloudfake.New()
+	api.AddSnapshot(cloud.Snapshot{ID: "5b000000-0000-4000-8000-000000000001", StorageID: "gone", Zone: testZone, Title: "snap",
+		State: cloud.StorageStateOnline, SizeGibibytes: 2})
+	csiDriver := newTestDriver(t, api, newFakeHost())
+	request := createRequest("pvc-restored-twice", gibibyte, nil)
+	request.VolumeContentSource = &csi.VolumeContentSource{Type: &csi.VolumeContentSource_Snapshot{
+		Snapshot: &csi.VolumeContentSource_SnapshotSource{SnapshotId: "5b000000-0000-4000-8000-000000000001"}}}
+	first, firstError := csiDriver.CreateVolume(context.Background(), request)
+	if firstError != nil {
+		t.Fatalf("CreateVolume: %v", firstError)
+	}
+	if _, deleteError := api.DeleteSnapshot(context.Background(), "5b000000-0000-4000-8000-000000000001"); deleteError != nil {
+		t.Fatalf("DeleteSnapshot: %v", deleteError)
+	}
+	again, againError := csiDriver.CreateVolume(context.Background(), request)
+	if againError != nil || again.GetVolume().GetVolumeId() != first.GetVolume().GetVolumeId() {
+		t.Fatalf("the retry: %v, %v; want the storage %s", again, againError, first.GetVolume().GetVolumeId())
+	}
 }
 
 func TestDeleteVolume(t *testing.T) {
@@ -335,6 +580,72 @@ func TestDeleteVolume(t *testing.T) {
 	api.FailWith("GetVolume", http.StatusForbidden)
 	_, forbiddenError := csiDriver.DeleteVolume(context.Background(), &csi.DeleteVolumeRequest{VolumeId: volumeID})
 	expectCode(t, forbiddenError, codes.PermissionDenied)
+}
+
+// The API refuses to delete a storage it is already deleting. Answered as FailedPrecondition, that failed every retry
+// of a DeleteVolume whose first call had timed out.
+func TestDeleteVolumeOfAStorageAlreadyBeingDeletedSucceedsOnceItIsGone(t *testing.T) {
+	api := cloudfake.New()
+	csiDriver := newTestDriver(t, api, newFakeHost())
+	deleting := storageNamed("pvc-deleting", 1, cloud.StorageStateDeleting)
+	api.AddVolume(deleting)
+	api.SettleVolume(deleting.ID, 3, cloud.StorageStateDeleted)
+	if _, deleteError := csiDriver.DeleteVolume(context.Background(), &csi.DeleteVolumeRequest{VolumeId: deleting.ID}); deleteError != nil {
+		t.Fatalf("DeleteVolume of a storage being deleted: %v", deleteError)
+	}
+	expectStorages(t, api, "pvc-deleting", 0)
+	if api.Calls("DeleteVolume") != 0 {
+		t.Fatalf("%d deletes were sent for a storage the API was already deleting", api.Calls("DeleteVolume"))
+	}
+
+	held := storageNamed("pvc-deleting-slowly", 2, cloud.StorageStateDeleting)
+	api.AddVolume(held)
+	_, heldError := csiDriver.DeleteVolume(heldCall(t), &csi.DeleteVolumeRequest{VolumeId: held.ID})
+	expectCode(t, heldError, codes.DeadlineExceeded)
+
+	raced := storageNamed("pvc-deleting-raced", 3, cloud.StorageStateDeleting)
+	api.AddVolume(raced)
+	api.SettleVolume(raced.ID, 3, cloud.StorageStateDeleted)
+	stale := raced
+	stale.State = cloud.StorageStateOnline
+	csiDriver.options.API = &staleReadAPI{API: api, stale: &stale}
+	if _, racedError := csiDriver.DeleteVolume(context.Background(), &csi.DeleteVolumeRequest{VolumeId: raced.ID}); racedError != nil {
+		t.Fatalf("DeleteVolume refused with 409 for a storage being deleted: %v", racedError)
+	}
+	expectStorages(t, api, "pvc-deleting-raced", 0)
+	if api.Calls("DeleteVolume") != 1 {
+		t.Fatalf("%d deletes, want the one the API refused", api.Calls("DeleteVolume"))
+	}
+	csiDriver.options.API = api
+
+	failed := storageNamed("pvc-deleting-failed", 4, cloud.StorageStateError)
+	api.AddVolume(failed)
+	if _, failedError := csiDriver.DeleteVolume(context.Background(), &csi.DeleteVolumeRequest{VolumeId: failed.ID}); failedError != nil {
+		t.Fatalf("DeleteVolume of a storage in error: %v", failedError)
+	}
+	expectStorages(t, api, "pvc-deleting-failed", 0)
+
+	online := storageNamed("pvc-deleting-refused", 5, cloud.StorageStateOnline)
+	api.AddVolume(online)
+	api.FailWithDetail("DeleteVolume", http.StatusConflict, "the storage has snapshots; delete them first")
+	_, refusedError := csiDriver.DeleteVolume(context.Background(), &csi.DeleteVolumeRequest{VolumeId: online.ID})
+	expectCode(t, refusedError, codes.FailedPrecondition)
+}
+
+// staleReadAPI answers the first read of a storage with what the storage was before its delete began, the way a
+// DeleteVolume sees a storage whose delete starts between its read and its own delete.
+type staleReadAPI struct {
+	*cloudfake.API
+	stale *cloud.Volume
+}
+
+func (api *staleReadAPI) GetVolume(ctx context.Context, volumeID string) (cloud.Volume, error) {
+	if api.stale != nil && api.stale.ID == volumeID {
+		stale := *api.stale
+		api.stale = nil
+		return stale, nil
+	}
+	return api.API.GetVolume(ctx, volumeID)
 }
 
 func TestControllerPublishAndUnpublish(t *testing.T) {
