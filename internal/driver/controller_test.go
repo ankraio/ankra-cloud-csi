@@ -509,7 +509,7 @@ func TestAnAPIReadThatFailsDoesNotEndProvisioningAndALaterCallAdoptsTheStorage(t
 func TestCreateVolumeUsesTheOldestOfSeveralStoragesAndDeletesAFailedOne(t *testing.T) {
 	api := cloudfake.New()
 	csiDriver := newTestDriver(t, api, newFakeHost())
-	createdAt := time.Date(2026, 11, 26, 9, 0, 0, 0, time.UTC)
+	createdAt := time.Date(2026, 9, 1, 9, 0, 0, 0, time.UTC)
 	newer := storageNamed("pvc-twins", 1, cloud.StorageStateOnline)
 	newer.CreatedAt = createdAt.Add(time.Hour)
 	older := storageNamed("pvc-twins", 2, cloud.StorageStateOnline)
